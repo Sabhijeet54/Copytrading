@@ -122,3 +122,4 @@ See [docs/API.md](docs/API.md) for every endpoint and [docs/ARCHITECTURE.md](doc
 - No broker connect flow, strategy management or copy engine yet (Phases 2–5). Admin trade/order/position screens are wired to the real tables and will populate once those exist.
 - Email delivery requires SMTP settings; without them, development mode writes verification links to the API log.
 # Copytrading
+# Copytrading
