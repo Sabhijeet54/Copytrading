@@ -1,0 +1,588 @@
+// Copy Trading Platform — PostgreSQL schema
+// Money/price columns use Decimal (never float). All timestamps are UTC.
+
+generator client {
+  provider   = "prisma-client-js"
+  // Rust-free client: queries are compiled by a bundled WASM module and executed through
+  // the node-postgres driver adapter (see src/index.ts). No native query-engine binary at runtime.
+  engineType = "client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================================
+// Enums (mirrored for the frontend in packages/types/src/enums.ts)
+// =====================================================================
+
+/// Role-based access control. One role per user.
+enum Role {
+  ADMIN
+  MASTER
+  FOLLOWER
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum BrokerName {
+  ZERODHA
+  ANGEL_ONE
+  MOCK
+}
+
+enum BrokerAccountStatus {
+  PENDING // authorization started, callback not yet completed
+  CONNECTED
+  EXPIRED // broker session/token expired — user must re-authorize
+  DISCONNECTED
+  ERROR
+}
+
+enum StrategyStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum AllocationMode {
+  FIXED_QUANTITY
+  CAPITAL_PERCENTAGE
+  PROPORTIONAL
+}
+
+enum CopyStatus {
+  OFF
+  ON
+  PAUSED
+}
+
+enum Exchange {
+  NSE
+  BSE
+  NFO
+  BFO
+  MCX
+  CDS
+  BCD
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum OrderType {
+  MARKET
+  LIMIT
+  SL
+  SL_M
+}
+
+/// Broker-neutral product type; adapters map to broker codes.
+enum ProductType {
+  DELIVERY
+  INTRADAY
+  CARRY_FORWARD
+}
+
+enum OrderStatus {
+  PENDING
+  SUBMITTED
+  OPEN
+  PARTIALLY_FILLED
+  FILLED
+  CANCELLED
+  REJECTED
+  FAILED
+  UNKNOWN
+}
+
+enum OrderSource {
+  MASTER // order observed on a master's broker account
+  COPY // order placed by the copy engine on a follower account
+  EXTERNAL // order observed on a follower account that the platform did not place
+}
+
+enum NotificationSeverity {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+}
+
+enum TransactionType {
+  REALIZED_PNL
+  CHARGES
+  ADJUSTMENT
+}
+
+enum SystemEventSeverity {
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+enum AuditAction {
+  USER_REGISTERED
+  USER_LOGIN
+  USER_LOGIN_FAILED
+  USER_LOGOUT
+  EMAIL_VERIFIED
+  PASSWORD_CHANGED
+  PROFILE_UPDATED
+  REFRESH_TOKEN_REUSE_DETECTED
+  BROKER_CONNECTED
+  BROKER_DISCONNECTED
+  STRATEGY_CREATED
+  STRATEGY_UPDATED
+  STRATEGY_STARTED
+  STRATEGY_STOPPED
+  COPY_STARTED
+  COPY_STOPPED
+  MASTER_TRADE_DETECTED
+  COPY_ORDER_CREATED
+  COPY_ORDER_SUBMITTED
+  COPY_ORDER_FILLED
+  COPY_ORDER_FAILED
+  ADMIN_DISABLED_USER
+  ADMIN_ENABLED_USER
+  ADMIN_STOPPED_COPY
+  ADMIN_RESUMED_COPY
+  ADMIN_DISCONNECTED_BROKER
+}
+
+// =====================================================================
+// Identity
+// =====================================================================
+
+model User {
+  id              String     @id @default(cuid())
+  email           String     @unique // stored lower-cased
+  passwordHash    String // argon2id — never the raw password
+  name            String
+  mobile          String?
+  role            Role
+  status          UserStatus @default(ACTIVE)
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  disabledAt      DateTime?
+  disabledReason  String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  sessions           Session[]
+  verificationTokens EmailVerificationToken[]
+  brokerAccounts     BrokerAccount[]
+  strategies         Strategy[]               @relation("StrategyMaster")
+  follows            StrategyFollower[]       @relation("FollowerUser")
+  masterTrades       MasterTrade[]
+  copyOrders         CopyOrder[]
+  orders             Order[]
+  positions          Position[]
+  notifications      Notification[]
+  auditLogs          AuditLog[]               @relation("AuditActor")
+  transactions       Transaction[]
+
+  @@index([role, status])
+}
+
+/// Refresh-token session. Only the SHA-256 hash of the token is stored.
+/// Rotation: each refresh revokes the current row and creates a new one in the same family.
+/// Presenting a revoked token revokes the whole family (reuse detection).
+model Session {
+  id           String    @id @default(cuid())
+  userId       String
+  familyId     String
+  tokenHash    String    @unique
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  replacedById String?
+  ip           String?
+  userAgent    String?
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// =====================================================================
+// Brokers
+// =====================================================================
+
+model BrokerAccount {
+  id              String              @id @default(cuid())
+  userId          String
+  broker          BrokerName
+  brokerClientId  String? // broker's user/client id (e.g. Kite user_id). Not a secret.
+  status          BrokerAccountStatus @default(PENDING)
+  isPaper         Boolean             @default(false)
+  tokenExpiresAt  DateTime?
+  lastConnectedAt DateTime?
+  lastError       String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  credential   BrokerCredential?
+  follows      StrategyFollower[]
+  masterTrades MasterTrade[]
+  copyOrders   CopyOrder[]
+  orders       Order[]
+  positions    Position[]
+  transactions Transaction[]
+
+  @@unique([userId, broker])
+  // A single real broker account can only be linked to one platform user.
+  @@unique([broker, brokerClientId])
+  @@index([status])
+}
+
+/// Encrypted (AES-256-GCM) broker session material. Never returned by any API.
+model BrokerCredential {
+  id                    String   @id @default(cuid())
+  brokerAccountId       String   @unique
+  encryptedAccessToken  String
+  encryptedRefreshToken String?
+  /// Broker-specific extra session material (e.g. a market-data feed token), encrypted JSON.
+  encryptedExtra        String?
+  keyId                 String   @default("k1")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  brokerAccount BrokerAccount @relation(fields: [brokerAccountId], references: [id], onDelete: Cascade)
+}
+
+/// Instrument master (lot size / tick size / per-broker tokens) used for quantity validation.
+model Instrument {
+  id            String    @id @default(cuid())
+  exchange      Exchange
+  tradingSymbol String
+  name          String?
+  segment       String?
+  instrumentType String? // EQ, FUT, CE, PE ...
+  lotSize       Int       @default(1)
+  tickSize      Decimal   @default(0.05) @db.Decimal(18, 4)
+  expiry        DateTime?
+  strike        Decimal?  @db.Decimal(18, 4)
+  zerodhaToken  String?
+  angelToken    String?
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([exchange, tradingSymbol])
+  @@index([zerodhaToken])
+  @@index([angelToken])
+}
+
+// =====================================================================
+// Strategies
+// =====================================================================
+
+model Strategy {
+  id                 String         @id @default(cuid())
+  masterUserId       String
+  name               String
+  description        String?
+  riskLevel          RiskLevel      @default(MEDIUM)
+  status             StrategyStatus @default(DRAFT)
+  allowedExchanges   Exchange[]
+  /// Allowed trading-symbol patterns, e.g. "NIFTY*" or "BANKNIFTY*". Empty = any symbol on allowed exchanges.
+  allowedInstruments String[]
+  maxFollowers       Int?
+  /// Capital the master trades this strategy with; basis for PROPORTIONAL allocation.
+  masterCapital      Decimal        @default(0) @db.Decimal(18, 2)
+  /// Strategy-level hard limits applied to every follower order.
+  maxOrderValue      Decimal?       @db.Decimal(18, 2)
+  maxQuantityPerOrder Int?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  master       User               @relation("StrategyMaster", fields: [masterUserId], references: [id], onDelete: Restrict)
+  followers    StrategyFollower[]
+  masterTrades MasterTrade[]
+
+  @@index([masterUserId])
+  @@index([status])
+}
+
+/// A follower's subscription + risk configuration for one strategy.
+/// copyStatus defaults to OFF: connecting a broker or following never starts copying automatically.
+model StrategyFollower {
+  id                String         @id @default(cuid())
+  strategyId        String
+  followerUserId    String
+  brokerAccountId   String?
+  allocationMode    AllocationMode @default(CAPITAL_PERCENTAGE)
+  allocationAmount  Decimal?       @db.Decimal(18, 2)
+  allocationPercent Decimal?       @db.Decimal(5, 2)
+  fixedQuantity     Int?
+  riskLevel         RiskLevel?
+  maxTradeValue     Decimal?       @db.Decimal(18, 2)
+  maxDailyLoss      Decimal?       @db.Decimal(18, 2)
+  maxQuantity       Int?
+  maxOpenPositions  Int?
+  copyStatus        CopyStatus     @default(OFF)
+  startedAt         DateTime?
+  stoppedAt         DateTime?
+  stoppedReason     String?
+  stoppedByUserId   String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  strategy      Strategy       @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  follower      User           @relation("FollowerUser", fields: [followerUserId], references: [id], onDelete: Cascade)
+  brokerAccount BrokerAccount? @relation(fields: [brokerAccountId], references: [id], onDelete: SetNull)
+  copyOrders    CopyOrder[]
+
+  @@unique([strategyId, followerUserId])
+  @@index([followerUserId])
+  @@index([copyStatus])
+}
+
+// =====================================================================
+// Trading
+// =====================================================================
+
+/// A master execution detected from the master's broker (normalized). One row per master broker order.
+model MasterTrade {
+  id              String      @id @default(cuid())
+  masterUserId    String
+  strategyId      String?
+  brokerAccountId String
+  broker          BrokerName
+  brokerOrderId   String
+  exchange        Exchange
+  symbol          String
+  instrumentToken String?
+  side            OrderSide
+  orderType       OrderType
+  productType     ProductType
+  quantity        Int
+  filledQuantity  Int         @default(0)
+  price           Decimal?    @db.Decimal(18, 4)
+  averagePrice    Decimal?    @db.Decimal(18, 4)
+  status          OrderStatus
+  eventTimestamp  DateTime
+  rawPayload      Json?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  master        User          @relation(fields: [masterUserId], references: [id], onDelete: Restrict)
+  strategy      Strategy?     @relation(fields: [strategyId], references: [id], onDelete: SetNull)
+  brokerAccount BrokerAccount @relation(fields: [brokerAccountId], references: [id], onDelete: Restrict)
+  copyOrders    CopyOrder[]
+
+  // Idempotency: the same master broker order is only ever recorded once.
+  @@unique([brokerAccountId, brokerOrderId])
+  @@index([masterUserId, createdAt])
+  @@index([strategyId])
+  @@index([createdAt])
+}
+
+/// A follower order created by the copy engine for one master trade.
+model CopyOrder {
+  id                 String      @id @default(cuid())
+  masterTradeId      String
+  strategyFollowerId String
+  followerUserId     String
+  brokerAccountId    String
+  broker             BrokerName
+  /// `${masterTradeId}:${followerUserId}` — also enforced by the composite unique below.
+  idempotencyKey     String      @unique
+  exchange           Exchange
+  symbol             String
+  instrumentToken    String?
+  side               OrderSide
+  orderType          OrderType
+  productType        ProductType
+  quantity           Int
+  filledQuantity     Int         @default(0)
+  price              Decimal?    @db.Decimal(18, 4)
+  averagePrice       Decimal?    @db.Decimal(18, 4)
+  status             OrderStatus @default(PENDING)
+  brokerOrderId      String?
+  errorCode          String?
+  errorMessage       String?
+  attempts           Int         @default(0)
+  lastAttemptAt      DateTime?
+  submittedAt        DateTime?
+  filledAt           DateTime?
+  isPaper            Boolean     @default(false)
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  masterTrade      MasterTrade      @relation(fields: [masterTradeId], references: [id], onDelete: Restrict)
+  strategyFollower StrategyFollower @relation(fields: [strategyFollowerId], references: [id], onDelete: Restrict)
+  follower         User             @relation(fields: [followerUserId], references: [id], onDelete: Restrict)
+  brokerAccount    BrokerAccount    @relation(fields: [brokerAccountId], references: [id], onDelete: Restrict)
+  transactions     Transaction[]
+
+  // CRITICAL: one master trade can never produce two orders for the same follower.
+  @@unique([masterTradeId, followerUserId])
+  @@unique([brokerAccountId, brokerOrderId])
+  @@index([status])
+  @@index([followerUserId, createdAt])
+  @@index([createdAt])
+}
+
+/// Mirror of broker order books (master, copy and external orders) used for reconciliation.
+model Order {
+  id                String      @id @default(cuid())
+  userId            String
+  brokerAccountId   String
+  broker            BrokerName
+  brokerOrderId     String
+  source            OrderSource
+  exchange          Exchange
+  symbol            String
+  instrumentToken   String?
+  side              OrderSide
+  orderType         OrderType
+  productType       ProductType
+  quantity          Int
+  filledQuantity    Int         @default(0)
+  pendingQuantity   Int         @default(0)
+  price             Decimal?    @db.Decimal(18, 4)
+  triggerPrice      Decimal?    @db.Decimal(18, 4)
+  averagePrice      Decimal?    @db.Decimal(18, 4)
+  status            OrderStatus
+  statusMessage     String?
+  brokerTimestamp   DateTime?
+  rawPayload        Json?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brokerAccount BrokerAccount @relation(fields: [brokerAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([brokerAccountId, brokerOrderId])
+  @@index([userId, createdAt])
+  @@index([status])
+}
+
+model Position {
+  id              String      @id @default(cuid())
+  userId          String
+  brokerAccountId String
+  exchange        Exchange
+  symbol          String
+  instrumentToken String?
+  productType     ProductType
+  /// Net quantity: positive = long, negative = short.
+  quantity        Int
+  averagePrice    Decimal     @db.Decimal(18, 4)
+  lastPrice       Decimal?    @db.Decimal(18, 4)
+  realizedPnl     Decimal     @default(0) @db.Decimal(18, 2)
+  unrealizedPnl   Decimal     @default(0) @db.Decimal(18, 2)
+  isPaper         Boolean     @default(false)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brokerAccount BrokerAccount @relation(fields: [brokerAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([brokerAccountId, exchange, symbol, productType])
+  @@index([userId])
+}
+
+/// Ledger of realized P&L, charges and adjustments (basis for daily-loss limits).
+model Transaction {
+  id              String          @id @default(cuid())
+  userId          String
+  brokerAccountId String?
+  copyOrderId     String?
+  type            TransactionType
+  amount          Decimal         @db.Decimal(18, 2)
+  description     String?
+  occurredAt      DateTime        @default(now())
+  createdAt       DateTime        @default(now())
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brokerAccount BrokerAccount? @relation(fields: [brokerAccountId], references: [id], onDelete: SetNull)
+  copyOrder     CopyOrder?     @relation(fields: [copyOrderId], references: [id], onDelete: SetNull)
+
+  @@index([userId, occurredAt])
+}
+
+// =====================================================================
+// Platform
+// =====================================================================
+
+model Notification {
+  id        String               @id @default(cuid())
+  userId    String
+  severity  NotificationSeverity @default(INFO)
+  type      String
+  title     String
+  body      String?
+  data      Json?
+  readAt    DateTime?
+  createdAt DateTime             @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+/// Append-only audit trail. Metadata is redacted before insert — never contains secrets.
+model AuditLog {
+  id          String      @id @default(cuid())
+  actorUserId String?
+  action      AuditAction
+  targetType  String?
+  targetId    String?
+  metadata    Json?
+  ip          String?
+  userAgent   String?
+  createdAt   DateTime    @default(now())
+
+  actor User? @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([action, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([targetType, targetId])
+  @@index([createdAt])
+}
+
+/// Operational events (reconciliation mismatches, broker stream drops, worker errors) for admin alerts.
+model SystemEvent {
+  id         String              @id @default(cuid())
+  source     String // API | WORKER | RECONCILIATION | BROKER_STREAM
+  type       String
+  severity   SystemEventSeverity @default(INFO)
+  message    String
+  context    Json?
+  resolvedAt DateTime?
+  createdAt  DateTime            @default(now())
+
+  @@index([severity, createdAt])
+  @@index([createdAt])
+}

@@ -1,0 +1,45 @@
+{
+  "name": "@ctp/api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "nest start --watch --preserveWatchOutput",
+    "build": "nest build",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "jest --config jest.config.js",
+    "test:e2e": "jest --config jest.e2e.config.js --runInBand"
+  },
+  "dependencies": {
+    "@ctp/config": "*",
+    "@ctp/database": "*",
+    "@ctp/shared": "*",
+    "@ctp/types": "*",
+    "@nestjs/common": "^11.1.0",
+    "@nestjs/core": "^11.1.0",
+    "@nestjs/jwt": "^11.0.0",
+    "@nestjs/platform-express": "^11.1.0",
+    "@nestjs/throttler": "^6.4.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
+    "cookie-parser": "^1.4.7",
+    "helmet": "^8.0.0",
+    "ioredis": "^5.4.2",
+    "nodemailer": "^10.0.16",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "undici": "^7.30.0"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
+    "@nestjs/testing": "^11.1.0",
+    "@types/cookie-parser": "^1.4.8",
+    "@types/express": "^5.0.0",
+    "@types/jest": "^30.0.0",
+    "@types/nodemailer": "^8.0.0",
+    "@types/supertest": "^6.0.2",
+    "jest": "^30.2.0",
+    "supertest": "^7.0.0",
+    "ts-jest": "^29.4.5"
+  }
+}

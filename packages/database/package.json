@@ -1,0 +1,32 @@
+{
+  "name": "@ctp/database",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Prisma schema, migrations, client and seed data.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "prisma"
+  ],
+  "scripts": {
+    "generate": "prisma generate --config ../../prisma.config.ts",
+    "build": "prisma generate --config ../../prisma.config.ts && tsc -b",
+    "migrate:dev": "prisma migrate dev --config ../../prisma.config.ts",
+    "migrate:deploy": "prisma migrate deploy --config ../../prisma.config.ts",
+    "migrate:status": "prisma migrate status --config ../../prisma.config.ts",
+    "reset": "prisma migrate reset --force --config ../../prisma.config.ts",
+    "seed": "tsx prisma/seed.ts",
+    "studio": "prisma studio --config ../../prisma.config.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "~6.19.0",
+    "@ctp/shared": "*",
+    "@prisma/adapter-pg": "~6.19.0",
+    "@ctp/config": "*"
+  },
+  "devDependencies": {
+    "prisma": "~6.19.0",
+    "tsx": "^4.19.2"
+  }
+}

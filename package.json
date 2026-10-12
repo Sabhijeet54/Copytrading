@@ -1,0 +1,47 @@
+{
+  "name": "copy-trading-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Copy trading platform: broker-agnostic copy engine with Zerodha Kite Connect and Angel One SmartAPI adapters.",
+  "workspaces": [
+    "packages/types",
+    "packages/config",
+    "packages/shared",
+    "packages/database",
+    "apps/api",
+    "apps/worker",
+    "apps/web"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "postinstall": "npm run build:packages",
+    "build:packages": "npm run generate -w @ctp/database && tsc -b packages/types packages/config packages/shared packages/database",
+    "dev:packages": "tsc -b -w --preserveWatchOutput packages/types packages/config packages/shared packages/database",
+    "dev": "concurrently -k -n pkg,api,web -c gray,blue,green \"npm:dev:packages\" \"npm run dev -w @ctp/api\" \"npm run dev -w @ctp/web\"",
+    "worker": "npm run dev -w @ctp/worker",
+    "build": "npm run build:packages && npm run build -w @ctp/api && npm run build -w @ctp/worker && npm run build -w @ctp/web",
+    "typecheck": "npm run build:packages && npm run typecheck -w @ctp/api -w @ctp/worker -w @ctp/web",
+    "test": "npm run test -w @ctp/api",
+    "test:e2e": "npm run test:e2e -w @ctp/api",
+    "prisma:generate": "npm run generate -w @ctp/database",
+    "prisma:migrate": "npm run migrate:dev -w @ctp/database",
+    "prisma:deploy": "npm run migrate:deploy -w @ctp/database",
+    "prisma:studio": "npm run studio -w @ctp/database",
+    "db:seed": "npm run seed -w @ctp/database",
+    "db:reset": "npm run reset -w @ctp/database",
+    "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo apps/api/dist apps/worker/dist apps/web/.next"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "concurrently": "^9.1.0",
+    "typescript": "~5.7.3",
+    "dotenv": "^16.4.7",
+    "prisma": "~6.19.0"
+  },
+  "overrides": {
+    "shell-quote": "^1.12.0",
+    "deepmerge-ts": "^8.0.2"
+  }
+}

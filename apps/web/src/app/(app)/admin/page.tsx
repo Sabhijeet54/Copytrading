@@ -1,0 +1,147 @@
+'use client';
+
+import {
+  ArrowLeftRight,
+  BarChart3,
+  CheckCircle2,
+  Layers,
+  OctagonX,
+  PlayCircle,
+  ShieldAlert,
+  TriangleAlert,
+  UserCheck,
+  Users,
+  Wallet,
+  XCircle,
+} from 'lucide-react';
+import { useState } from 'react';
+import { toast } from 'sonner';
+import { PageHeader } from '@/components/page-header';
+import { ReasonDialog } from '@/components/reason-dialog';
+import { StatCard } from '@/components/stat-card';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { formatDateTime, formatNumber } from '@/lib/format';
+import { useAdminAction, useAdminDashboard, useAdminSystemHealth } from '@/lib/queries';
+
+export default function AdminOverviewPage() {
+  const stats = useAdminDashboard();
+  const health = useAdminSystemHealth();
+  const halt = useAdminAction<{ reason: string }>('POST', () => '/admin/copy-trading/halt');
+  const resume = useAdminAction<{ reason: string }>('POST', () => '/admin/copy-trading/resume');
+  const [dialog, setDialog] = useState<'halt' | 'resume' | null>(null);
+
+  const s = stats.data;
+  const loading = stats.isLoading;
+  const copyHalt = health.data?.copyHalt ?? null;
+
+  return (
+    <>
+      <PageHeader
+        title="Admin overview"
+        description="Platform activity for today (IST). Refreshes automatically."
+        actions={
+          copyHalt ? (
+            <Button variant="outline" onClick={() => setDialog('resume')}>
+              <PlayCircle /> Resume copy trading
+            </Button>
+          ) : (
+            <Button variant="destructive" onClick={() => setDialog('halt')}>
+              <OctagonX /> Halt all copy trading
+            </Button>
+          )
+        }
+      />
+
+      {s?.paperMode ? (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-4 py-2.5 text-sm">
+          <ShieldAlert className="size-4 shrink-0" />
+          <span>
+            <strong>Paper mode is ON.</strong> No real broker orders can be placed (PAPER_MODE=true).
+          </span>
+        </div>
+      ) : null}
+      {copyHalt ? (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-2.5 text-sm text-destructive">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+          <span>
+            <strong>Copy trading is halted platform-wide</strong> since {formatDateTime(copyHalt.haltedAt)}. Reason: {copyHalt.reason}
+          </span>
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard label="Total users" value={formatNumber(s?.totalUsers)} loading={loading} icon={<Users />} />
+        <StatCard label="Connected accounts" value={formatNumber(s?.connectedAccounts)} loading={loading} icon={<Wallet />} />
+        <StatCard label="Active masters" value={formatNumber(s?.activeMasters)} loading={loading} icon={<UserCheck />} hint="With an active strategy" />
+        <StatCard label="Active followers" value={formatNumber(s?.activeFollowers)} loading={loading} icon={<Users />} hint="Copy trading ON" />
+        <StatCard label="Active strategies" value={formatNumber(s?.activeStrategies)} loading={loading} icon={<Layers />} />
+        <StatCard label="Master trades today" value={formatNumber(s?.todaysMasterTrades)} loading={loading} icon={<BarChart3 />} />
+        <StatCard
+          label="Copy orders filled"
+          value={formatNumber(s?.successfulCopyOrders)}
+          tone="success"
+          loading={loading}
+          icon={<CheckCircle2 />}
+          hint="Today"
+        />
+        <StatCard
+          label="Copy orders failed"
+          value={formatNumber(s?.failedCopyOrders)}
+          tone={s && s.failedCopyOrders > 0 ? 'destructive' : 'default'}
+          loading={loading}
+          icon={<XCircle />}
+          hint="Failed or rejected today"
+        />
+      </div>
+
+      <Card className="mt-6 p-4">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+          <span className="font-medium">System</span>
+          {(['database', 'redis', 'worker'] as const).map((k) => (
+            <span key={k} className="inline-flex items-center gap-1.5 capitalize">
+              <span
+                className={`size-2 rounded-full ${health.data?.[k] === 'connected' ? 'bg-success' : health.data ? 'bg-destructive' : 'bg-muted-foreground'}`}
+              />
+              {k}
+            </span>
+          ))}
+          <span className="inline-flex items-center gap-1.5">
+            <ArrowLeftRight className="size-3.5 text-muted-foreground" />
+            Copy engine: {copyHalt ? 'halted' : 'accepting'}
+          </span>
+        </div>
+      </Card>
+
+      <ReasonDialog
+        open={dialog === 'halt'}
+        onOpenChange={(o) => setDialog(o ? 'halt' : null)}
+        title="Halt all copy trading?"
+        description="The copy engine will stop creating and submitting follower orders for every strategy until resumed. Existing broker orders are not cancelled."
+        confirmLabel="Halt copy trading"
+        pending={halt.isPending}
+        onConfirm={(reason) =>
+          halt.mutate(
+            { id: '', body: { reason } },
+            { onSuccess: () => (toast.success('Copy trading halted'), setDialog(null)), onError: (e) => toast.error(e.message) },
+          )
+        }
+      />
+      <ReasonDialog
+        open={dialog === 'resume'}
+        onOpenChange={(o) => setDialog(o ? 'resume' : null)}
+        title="Resume copy trading?"
+        description="Followers with copy trading ON will start receiving copies of new master trades again."
+        confirmLabel="Resume"
+        destructive={false}
+        pending={resume.isPending}
+        onConfirm={(reason) =>
+          resume.mutate(
+            { id: '', body: { reason } },
+            { onSuccess: () => (toast.success('Copy trading resumed'), setDialog(null)), onError: (e) => toast.error(e.message) },
+          )
+        }
+      />
+    </>
+  );
+}

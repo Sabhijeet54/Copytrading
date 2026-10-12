@@ -1,0 +1,146 @@
+import { z } from 'zod';
+
+/** Treat empty strings as "not set" so `.env.example` placeholders don't count as values. */
+const optionalString = z
+  .string()
+  .optional()
+  .transform((v) => (v === undefined || v.trim() === '' ? undefined : v.trim()));
+
+/** Strict boolean parser: only "true" / "false" (case-insensitive) are accepted. */
+const booleanFlag = (defaultValue: boolean) =>
+  z
+    .string()
+    .optional()
+    .transform((v, ctx) => {
+      if (v === undefined || v.trim() === '') return defaultValue;
+      const s = v.trim().toLowerCase();
+      if (s === 'true') return true;
+      if (s === 'false') return false;
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `expected "true" or "false", got "${v}"` });
+      return z.NEVER;
+    });
+
+const intFromString = (defaultValue: number, min = 1) =>
+  z
+    .string()
+    .optional()
+    .transform((v, ctx) => {
+      if (v === undefined || v.trim() === '') return defaultValue;
+      const n = Number(v);
+      if (!Number.isInteger(n) || n < min) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `expected an integer >= ${min}` });
+        return z.NEVER;
+      }
+      return n;
+    });
+
+const encryptionKey = z
+  .string({ required_error: 'ENCRYPTION_KEY is required (generate: openssl rand -base64 32)' })
+  .refine((v) => {
+    try {
+      return Buffer.from(v, 'base64').length === 32;
+    } catch {
+      return false;
+    }
+  }, 'ENCRYPTION_KEY must be 32 bytes, base64 encoded (generate: openssl rand -base64 32)');
+
+const baseSchema = z.object({
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  APP_ENV: z.enum(['development', 'staging', 'production']).default('development'),
+  DATABASE_URL: z.string({ required_error: 'DATABASE_URL is required' }).min(1),
+  REDIS_URL: z.string({ required_error: 'REDIS_URL is required' }).min(1),
+  ENCRYPTION_KEY: encryptionKey,
+  PAPER_MODE: booleanFlag(true),
+
+  ZERODHA_API_KEY: optionalString,
+  ZERODHA_API_SECRET: optionalString,
+  ZERODHA_REDIRECT_URL: optionalString,
+
+  ANGEL_API_KEY: optionalString,
+  ANGEL_CLIENT_ID: optionalString,
+  ANGEL_CLIENT_SECRET: optionalString,
+  ANGEL_REDIRECT_URL: optionalString,
+  /** Public static IP sent to SmartAPI in X-ClientPublicIP (must be the IP registered on the SmartAPI app). */
+  ANGEL_PUBLIC_IP: optionalString,
+  ANGEL_LOCAL_IP: optionalString,
+  ANGEL_MAC_ADDRESS: optionalString,
+
+  /**
+   * Optional outbound proxies (static-IP egress) for broker API calls, e.g.
+   * http://user:pass@dc-mum-006.staticip.in:443 — the proxy's exit IP is what you whitelist at the broker.
+   */
+  ZERODHA_PROXY_URL: optionalString,
+  ANGEL_PROXY_URL: optionalString,
+});
+
+export const apiEnvSchema = baseSchema
+  .extend({
+    API_PORT: intFromString(4000),
+    // Railway injects PORT; it wins over API_PORT when present.
+    PORT: optionalString,
+    WEB_ORIGIN: z.string().url().default('http://localhost:3000'),
+    API_PUBLIC_URL: z.string().url().default('http://localhost:4000'),
+    JWT_SECRET: z
+      .string({ required_error: 'JWT_SECRET is required (generate: openssl rand -base64 48)' })
+      .min(32, 'JWT_SECRET must be at least 32 characters'),
+    JWT_ACCESS_TTL_SECONDS: intFromString(900, 60),
+    REFRESH_TOKEN_TTL_DAYS: intFromString(14, 1),
+    COOKIE_SECURE: booleanFlag(false),
+    REQUIRE_EMAIL_VERIFICATION: booleanFlag(false),
+    TRUST_PROXY: booleanFlag(false),
+    SMTP_HOST: optionalString,
+    SMTP_PORT: intFromString(587),
+    SMTP_USER: optionalString,
+    SMTP_PASSWORD: optionalString,
+    MAIL_FROM: z.string().default('Copy Trading Platform <no-reply@example.com>'),
+    /** How often master broker order books are polled for trades placed outside the platform. 0 disables polling. */
+    COPY_POLL_INTERVAL_MS: intFromString(5000, 0),
+  })
+  .superRefine((env, ctx) => {
+    if (env.APP_ENV !== 'development' && !env.COOKIE_SECURE) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['COOKIE_SECURE'],
+        message: 'COOKIE_SECURE must be true outside development (HTTPS is required).',
+      });
+    }
+    if (env.APP_ENV !== 'development' && !env.SMTP_HOST && env.REQUIRE_EMAIL_VERIFICATION) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['SMTP_HOST'],
+        message: 'SMTP_HOST is required when REQUIRE_EMAIL_VERIFICATION=true outside development.',
+      });
+    }
+  });
+
+export const workerEnvSchema = baseSchema.extend({
+  WORKER_HEARTBEAT_INTERVAL_MS: intFromString(10_000, 1000),
+});
+
+export type ApiEnv = z.infer<typeof apiEnvSchema>;
+export type WorkerEnv = z.infer<typeof workerEnvSchema>;
+
+export class EnvValidationError extends Error {
+  constructor(public readonly issues: string[]) {
+    super(`Invalid environment configuration:\n  - ${issues.join('\n  - ')}`);
+    this.name = 'EnvValidationError';
+  }
+}
+
+function parse<T extends z.ZodTypeAny>(schema: T, source: NodeJS.ProcessEnv): z.infer<T> {
+  const result = schema.safeParse(source);
+  if (!result.success) {
+    // Only variable names and messages are reported — never values.
+    const issues = result.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`);
+    throw new EnvValidationError(issues);
+  }
+  return result.data;
+}
+
+export function loadApiEnv(source: NodeJS.ProcessEnv = process.env): ApiEnv {
+  return parse(apiEnvSchema, source);
+}
+
+export function loadWorkerEnv(source: NodeJS.ProcessEnv = process.env): WorkerEnv {
+  return parse(workerEnvSchema, source);
+}
