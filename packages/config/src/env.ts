@@ -95,6 +95,25 @@ export const apiEnvSchema = baseSchema
     MAIL_FROM: z.string().default('Copy Trading Platform <no-reply@example.com>'),
     /** How often master broker order books are polled for trades placed outside the platform. 0 disables polling. */
     COPY_POLL_INTERVAL_MS: intFromString(5000, 0),
+
+    /** Telegram alerts (optional). Bot token from @BotFather; admin chat receives platform alerts. */
+    TELEGRAM_BOT_TOKEN: optionalString,
+    TELEGRAM_ADMIN_CHAT_ID: optionalString,
+    /** IST HH:MM at which INTRADAY copy positions are auto squared off on weekdays. Empty = disabled. */
+    AUTO_SQUARE_OFF_TIME: z
+      .string()
+      .optional()
+      .transform((v) => (v === undefined ? '15:15' : v.trim()))
+      .refine((v) => v === '' || /^([01]\d|2[0-3]):[0-5]\d$/.test(v), 'AUTO_SQUARE_OFF_TIME must be HH:MM (IST) or empty'),
+    /** Master market feed is considered DOWN (and restarted) after this many seconds without a tick during market hours. */
+    FEED_STALE_SECONDS: intFromString(30, 5),
+    /** Max orders per second sent to each broker (all client accounts together). */
+    ORDER_RATE_PER_SEC_ZERODHA: intFromString(10, 1),
+    ORDER_RATE_PER_SEC_ANGEL: intFromString(10, 1),
+    /** How often expired broker tokens are detected. */
+    TOKEN_EXPIRY_CHECK_MS: intFromString(60_000, 5_000),
+    /** How often client P&L is polled for the daily-loss limit. 0 disables. */
+    RISK_POLL_INTERVAL_MS: intFromString(30_000, 0),
   })
   .superRefine((env, ctx) => {
     if (env.APP_ENV !== 'development' && !env.COOKIE_SECURE) {

@@ -23,13 +23,17 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { formatDateTime, formatNumber } from '@/lib/format';
 import { useAdminAction, useAdminDashboard, useAdminSystemHealth } from '@/lib/queries';
+import { useAdminLatency } from '@/lib/trading';
+import { MarketFeedPanel } from '@/components/market-feed-panel';
 
 export default function AdminOverviewPage() {
   const stats = useAdminDashboard();
   const health = useAdminSystemHealth();
   const halt = useAdminAction<{ reason: string }>('POST', () => '/admin/copy-trading/halt');
   const resume = useAdminAction<{ reason: string }>('POST', () => '/admin/copy-trading/resume');
-  const [dialog, setDialog] = useState<'halt' | 'resume' | null>(null);
+  const kill = useAdminAction<{ reason: string }, { stoppedFollowers: number; results: { orders: number; failed: number }[] }>('POST', () => '/admin/kill-switch');
+  const latency = useAdminLatency();
+  const [dialog, setDialog] = useState<'halt' | 'resume' | 'kill' | null>(null);
 
   const s = stats.data;
   const loading = stats.isLoading;
@@ -41,15 +45,20 @@ export default function AdminOverviewPage() {
         title="Admin overview"
         description="Platform activity for today (IST). Refreshes automatically."
         actions={
-          copyHalt ? (
-            <Button variant="outline" onClick={() => setDialog('resume')}>
-              <PlayCircle /> Resume copy trading
+          <>
+            {copyHalt ? (
+              <Button variant="outline" onClick={() => setDialog('resume')}>
+                <PlayCircle /> Resume copy trading
+              </Button>
+            ) : (
+              <Button variant="outline" onClick={() => setDialog('halt')}>
+                <OctagonX /> Halt copy trading
+              </Button>
+            )}
+            <Button variant="destructive" onClick={() => setDialog('kill')}>
+              <OctagonX /> KILL SWITCH
             </Button>
-          ) : (
-            <Button variant="destructive" onClick={() => setDialog('halt')}>
-              <OctagonX /> Halt all copy trading
-            </Button>
-          )
+          </>
         }
       />
 
@@ -113,6 +122,33 @@ export default function AdminOverviewPage() {
         </div>
       </Card>
 
+      <div className="mt-4 grid gap-3">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatCard label="Avg copy latency (today)" value={latency.data?.dbTodayAvgMs != null ? `${latency.data.dbTodayAvgMs} ms` : '—'} hint={`${latency.data?.dbTodayCount ?? 0} live orders`} />
+          <StatCard label="p95 latency" value={latency.data?.p95Ms != null ? `${latency.data.p95Ms} ms` : '—'} hint="Last 1000 orders (this server)" />
+        </div>
+        <MarketFeedPanel showLatency={false} />
+      </div>
+
+      <ReasonDialog
+        open={dialog === 'kill'}
+        onOpenChange={(o) => setDialog(o ? 'kill' : null)}
+        title="Activate KILL SWITCH?"
+        description="Halts the copy engine, turns copy trading OFF for every client and exits ALL open positions in every connected client trading account at MARKET."
+        confirmLabel="Kill switch — exit everything"
+        pending={kill.isPending}
+        onConfirm={(reason) =>
+          kill.mutate(
+            { id: 'all', body: { reason } },
+            {
+              onSuccess: (r) => (
+                toast.success(`Kill switch done: ${r.stoppedFollowers} subscriptions stopped, ${r.results.reduce((a, x) => a + x.orders, 0)} exit orders`), setDialog(null)
+              ),
+              onError: (e) => toast.error(e.message),
+            },
+          )
+        }
+      />
       <ReasonDialog
         open={dialog === 'halt'}
         onOpenChange={(o) => setDialog(o ? 'halt' : null)}

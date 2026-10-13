@@ -15,14 +15,14 @@ import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { brokerLabel, formatDateTime, formatINR, humanize } from '@/lib/format';
 import { useMyBrokerAccounts } from '@/lib/queries';
-import { type FollowInput, type StrategyWithSub, useFollow, useFollowStrategies, usePortfolio, useToggleCopy } from '@/lib/trading';
+import { type FollowInput, type StrategyWithSub, useExitAllMine, useFollow, useFollowStrategies, usePortfolio, useToggleCopy } from '@/lib/trading';
 
 const optNum = (v: string) => (v.trim() === '' ? undefined : Number(v));
 
 function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClose: () => void }) {
   const accounts = useMyBrokerAccounts();
   const follow = useFollow();
-  const [f, setF] = useState({ brokerAccountId: '', mode: 'CAPITAL_PERCENTAGE', percent: '100', amount: '', fixed: '', maxQty: '', maxValue: '' });
+  const [f, setF] = useState({ brokerAccountId: '', mode: 'CAPITAL_PERCENTAGE', percent: '100', amount: '', fixed: '', fixedLots: '', maxQty: '', maxValue: '', maxLots: '', maxLoss: '', maxTrades: '', eq: true, fo: true });
   useEffect(() => {
     if (!s) return;
     const sub = s.subscription;
@@ -35,6 +35,12 @@ function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClose: () =
       fixed: sub?.fixedQuantity ? String(sub.fixedQuantity) : '',
       maxQty: sub?.maxQuantity ? String(sub.maxQuantity) : '',
       maxValue: sub?.maxTradeValue ? String(Number(sub.maxTradeValue)) : '',
+      fixedLots: sub?.fixedLots ? String(sub.fixedLots) : '',
+      maxLots: sub?.maxLots ? String(sub.maxLots) : '',
+      maxLoss: sub?.maxDailyLoss ? String(Number(sub.maxDailyLoss)) : '',
+      maxTrades: sub?.maxTradesPerDay ? String(sub.maxTradesPerDay) : '',
+      eq: !sub?.allowedSegments?.length || sub.allowedSegments.includes('EQ'),
+      fo: !sub?.allowedSegments?.length || sub.allowedSegments.includes('FO'),
     });
   }, [s, accounts.data]);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF((p) => ({ ...p, [k]: e.target.value }));
@@ -63,7 +69,13 @@ function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClose: () =
                 fixedQuantity: f.mode === 'FIXED_QUANTITY' ? optNum(f.fixed) : undefined,
                 maxQuantity: optNum(f.maxQty),
                 maxTradeValue: optNum(f.maxValue),
+                fixedLots: f.mode === 'FIXED_QUANTITY' ? optNum(f.fixedLots) : undefined,
+                maxLots: optNum(f.maxLots),
+                maxDailyLoss: optNum(f.maxLoss),
+                maxTradesPerDay: optNum(f.maxTrades),
+                allowedSegments: f.eq && f.fo ? [] : [...(f.eq ? (['EQ'] as const) : []), ...(f.fo ? (['FO'] as const) : [])],
               };
+              if (!f.eq && !f.fo) return void toast.error('Allow at least one segment (EQ or F&O)');
               follow.mutate({ strategyId: s!.id, body }, { onSuccess: () => (toast.success('Saved — press Start to begin copying'), onClose()), onError: (err) => toast.error(err.message) });
             }}
           >
@@ -80,15 +92,16 @@ function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClose: () =
             <div className="grid gap-1.5">
               <Label>Allocation</Label>
               <Select value={f.mode} onChange={set('mode')}>
-                <option value="CAPITAL_PERCENTAGE">% of master quantity</option>
+                <option value="CAPITAL_PERCENTAGE">Multiplier (% of master quantity)</option>
                 <option value="PROPORTIONAL">My capital (proportional to master)</option>
-                <option value="FIXED_QUANTITY">Fixed quantity per trade</option>
+                <option value="FIXED_QUANTITY">Fixed lots / quantity per trade</option>
               </Select>
             </div>
             {f.mode === 'CAPITAL_PERCENTAGE' ? (
               <div className="grid gap-1.5">
                 <Label>Percent of master quantity</Label>
                 <Input type="number" min={0.01} step="0.01" value={f.percent} onChange={set('percent')} required />
+                <p className="text-xs text-muted-foreground">100 = 1× (same qty as master), 200 = 2×, 50 = 0.5×</p>
               </div>
             ) : f.mode === 'PROPORTIONAL' ? (
               <div className="grid gap-1.5">
@@ -97,9 +110,15 @@ function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClose: () =
                 <p className="text-xs text-muted-foreground">Master capital: {formatINR(s?.masterCapital)}</p>
               </div>
             ) : (
-              <div className="grid gap-1.5">
-                <Label>Quantity per trade</Label>
-                <Input type="number" min={1} value={f.fixed} onChange={set('fixed')} required />
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-1.5">
+                  <Label>Lots per trade</Label>
+                  <Input type="number" min={1} value={f.fixedLots} onChange={set('fixedLots')} placeholder="e.g. 1" />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label>or Quantity per trade</Label>
+                  <Input type="number" min={1} value={f.fixed} onChange={set('fixed')} required={!f.fixedLots} />
+                </div>
               </div>
             )}
             <div className="grid grid-cols-2 gap-4">
@@ -111,6 +130,27 @@ function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClose: () =
                 <Label>Max order value ₹</Label>
                 <Input type="number" min={0} value={f.maxValue} onChange={set('maxValue')} />
               </div>
+              <div className="grid gap-1.5">
+                <Label>Max lots / order</Label>
+                <Input type="number" min={1} value={f.maxLots} onChange={set('maxLots')} />
+              </div>
+              <div className="grid gap-1.5">
+                <Label>Max trades / day</Label>
+                <Input type="number" min={1} value={f.maxTrades} onChange={set('maxTrades')} />
+              </div>
+              <div className="col-span-2 grid gap-1.5">
+                <Label>Max loss per day ₹</Label>
+                <Input type="number" min={0} value={f.maxLoss} onChange={set('maxLoss')} placeholder="Copy stops and positions exit when hit" />
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-4 text-sm">
+              <span className="text-muted-foreground">Segments:</span>
+              <label className="flex items-center gap-1.5">
+                <input type="checkbox" checked={f.eq} onChange={(e) => setF((p) => ({ ...p, eq: e.target.checked }))} /> Equity (EQ)
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input type="checkbox" checked={f.fo} onChange={(e) => setF((p) => ({ ...p, fo: e.target.checked }))} /> F&amp;O
+              </label>
             </div>
             <DialogFooter>
               <Button type="submit" disabled={follow.isPending || !f.brokerAccountId}>
@@ -128,12 +168,47 @@ export default function PortfolioPage() {
   const strategies = useFollowStrategies();
   const portfolio = usePortfolio();
   const toggle = useToggleCopy();
+  const exitAll = useExitAllMine();
+  const [exitOpen, setExitOpen] = useState(false);
   const [follow, setFollow] = useState<StrategyWithSub | null>(null);
   const p = portfolio.data;
 
   return (
     <>
-      <PageHeader title="My portfolio" description="Strategies you follow, your live positions and every copied trade." />
+      <PageHeader
+        title="My portfolio"
+        description="Strategies you follow, your live positions and every copied trade."
+        actions={
+          <Button variant="destructive" size="sm" onClick={() => setExitOpen(true)}>
+            Exit all &amp; stop copy
+          </Button>
+        }
+      />
+      <Dialog open={exitOpen} onOpenChange={setExitOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Exit all positions and stop copying?</DialogTitle>
+            <DialogDescription>All your copy subscriptions are turned OFF and every open position in your trading account is closed at MARKET.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setExitOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={exitAll.isPending}
+              onClick={() =>
+                exitAll.mutate(undefined, {
+                  onSuccess: (r) => (toast.success(`Copy stopped · ${r.orders} exit order(s)${r.failed ? `, ${r.failed} failed` : ''}`), setExitOpen(false)),
+                  onError: (e) => toast.error(e.message),
+                })
+              }
+            >
+              {exitAll.isPending ? 'Exiting…' : 'Exit all'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {p?.paperMode ? (
         <p className="mb-4 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
           <strong>Paper mode is ON</strong> — copied trades are simulated, no real orders are placed in your account.
@@ -243,7 +318,7 @@ export default function PortfolioPage() {
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{formatINR(c.averagePrice)}</TableCell>
                       <TableCell>
-                        <StatusBadge value={c.status} />
+                        {c.errorCode === 'MISSED' ? <StatusBadge value="WARNING" label="Missed · paper" /> : <StatusBadge value={c.status} />}
                       </TableCell>
                       <TableCell className="max-w-64 truncate text-xs text-muted-foreground" title={c.errorMessage ?? ''}>
                         {c.errorMessage ?? (c.brokerOrderId ? `Order ${c.brokerOrderId}` : '')}

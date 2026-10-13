@@ -13,6 +13,10 @@ import { REDIS } from '../common/redis/redis.module';
 import { BrokerApiError } from '../brokers/broker-http';
 import { CopyEngineService } from './copy-engine.service';
 import { MasterPollerService } from './master-poller.service';
+import { RiskService } from './risk.service';
+import { AccountEvents } from '../realtime/account-events';
+import { MarketFeedService } from '../market-data/market-feed.service';
+import { instrumentKey, PriceCacheService } from '../market-data/price-cache.service';
 import { MasterOrderDto, StrategyDto, StrategyStatusDto } from './trading.dto';
 import { TradingService } from './trading.service';
 
@@ -27,6 +31,10 @@ export class MasterController {
     private readonly engine: CopyEngineService,
     private readonly poller: MasterPollerService,
     private readonly audit: AuditService,
+    private readonly risk: RiskService,
+    private readonly accountEvents: AccountEvents,
+    private readonly prices: PriceCacheService,
+    private readonly feed: MarketFeedService,
   ) {}
 
   private async own(user: RequestUser, id: string): Promise<Strategy> {
@@ -105,6 +113,7 @@ export class MasterController {
       const accounts = await this.prisma.brokerAccount.findMany({ where: { userId: user.id }, select: { id: true } });
       if (accounts.length) await this.redis.del(...accounts.map((a) => `ctp:poll:seen:${a.id}`));
     }
+    this.accountEvents.emit({ type: 'settings', brokerAccountId: '', userId: user.id });
     await this.audit.log({
       action: dto.status === 'ACTIVE' ? 'STRATEGY_STARTED' : dto.status === 'PAUSED' ? 'STRATEGY_STOPPED' : 'STRATEGY_UPDATED',
       actorUserId: user.id,
@@ -200,42 +209,60 @@ export class MasterController {
     const accounts = await this.prisma.brokerAccount.findMany({ where: { userId: user.id }, orderBy: { createdAt: 'asc' } });
     const account = dto.brokerAccountId
       ? accounts.find((a) => a.id === dto.brokerAccountId)
-      : (accounts.find((a) => a.broker !== 'MOCK' && a.status === 'CONNECTED') ?? accounts.find((a) => a.broker === 'MOCK'));
+      : (accounts.find((a) => a.broker !== 'MOCK' && a.status === 'CONNECTED') ?? accounts.find((a) => a.broker === 'MOCK') ?? accounts[0]);
     if (!account) throw new BadRequestException('Connect a broker account first.');
 
-    const simulated = this.trading.isSimulated(account);
-    let price = dto.price ?? null;
-    if (price == null) {
-      const real = account.broker !== 'MOCK' && account.status === 'CONNECTED' ? account : accounts.find((a) => a.broker !== 'MOCK' && a.status === 'CONNECTED');
-      if (real) price = await (await this.trading.adapterFor(real)).ltp(dto.exchange, dto.symbol).catch(() => null);
-    }
-    if (simulated && price == null) throw new BadRequestException('Live price unavailable — enter a price for this paper trade.');
+    // The master's broker account is DATA_ONLY: the platform NEVER places orders on it. A master order from the
+    // platform is a SIGNAL that is mirrored to the followers only.
+    const isSignal = account.mode === 'DATA_ONLY' || this.trading.isSimulated(account);
+    const price = dto.price ?? this.prices.get(instrumentKey(dto.exchange, dto.symbol)) ?? null;
+    this.feed.ensure(dto.exchange, dto.symbol);
+    if (this.trading.isSimulated(account) && price == null) throw new BadRequestException('Live price unavailable — enter a price for this paper trade.');
 
     let brokerOrderId: string;
-    try {
-      if (simulated) {
-        brokerOrderId = `PAPER-${generateToken(9)}`;
-      } else {
+    if (isSignal) {
+      brokerOrderId = `SIG-${generateToken(9)}`;
+    } else {
+      try {
+        this.trading.assertOrderAllowed(account);
         ({ brokerOrderId } = await (await this.trading.adapterFor(account)).placeOrder({ ...dto, tag: 'ctpmaster' }));
         await this.poller.markSeen(account.id, brokerOrderId);
+      } catch (err) {
+        if (err instanceof BrokerApiError) throw new BadRequestException(await this.trading.handleBrokerError(account, err));
+        throw err;
       }
-    } catch (err) {
-      if (err instanceof BrokerApiError) throw new BadRequestException(await this.trading.handleBrokerError(account, err));
-      throw err;
     }
-    if (simulated) await this.engine.applyPaperFill(user.id, account.id, dto, dto.quantity, price ?? 0);
+    // Signal book: the master's own (virtual) position, for display.
+    if (isSignal && price != null) await this.engine.applyPaperFill(user.id, account.id, dto, dto.quantity, price);
 
-    const trade = await this.engine.onMasterTrade(strategy, account, {
+    const summary = await this.engine.onMasterTrade(strategy, account, {
       ...dto,
       brokerOrderId,
-      filledQuantity: simulated ? dto.quantity : 0,
-      averagePrice: simulated ? price : null,
+      filledQuantity: isSignal ? dto.quantity : 0,
+      averagePrice: isSignal ? price : null,
       price,
-      status: simulated ? 'FILLED' : 'SUBMITTED',
+      status: isSignal ? 'FILLED' : 'SUBMITTED',
       timestamp: new Date(),
       lotSize: dto.lotSize,
     });
-    return this.trade(user, trade!.id);
+    if (!summary) throw new BadRequestException('Duplicate order ignored.');
+    return { ...(await this.trade(user, summary.tradeId)), fanOutMs: summary.totalMs };
+  }
+
+  /** Exits every follower's open copy positions of this strategy (MARKET). */
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('strategies/:id/exit-all')
+  async exitAll(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    await this.own(user, id);
+    const results = await this.risk.exitStrategy(id);
+    return { orders: results.reduce((s, r) => s + r.orders, 0), failed: results.reduce((s, r) => s + r.failed, 0), results };
+  }
+
+  /** Average copy latency (ms) for the dashboard. */
+  @Get('latency')
+  async latency() {
+    return this.engine.latency.snapshot();
   }
 
   // ------------------------------------------------------------------ live
@@ -255,11 +282,12 @@ export class MasterController {
     };
   }
 
+  /** LTP from the live price cache (fed by the master feed) — never a broker quote call. */
   @Get('ltp')
-  async ltp(@CurrentUser() user: RequestUser, @Query('exchange') exchange: string, @Query('symbol') symbol: string) {
-    const acc = await this.prisma.brokerAccount.findFirst({ where: { userId: user.id, status: 'CONNECTED', broker: { not: 'MOCK' } }, orderBy: { broker: 'asc' } });
-    if (!acc || !exchange || !symbol) return { ltp: null };
-    const ad = await this.trading.adapterFor(acc).catch(() => null);
-    return { ltp: ad ? await ad.ltp(exchange.toUpperCase() as never, symbol.toUpperCase()).catch(() => null) : null };
+  async ltp(@Query('exchange') exchange: string, @Query('symbol') symbol: string) {
+    if (!exchange || !symbol) return { ltp: null };
+    this.feed.ensure(exchange.toUpperCase() as never, symbol.toUpperCase());
+    const tick = this.prices.getTick(instrumentKey(exchange, symbol));
+    return { ltp: tick?.ltp ?? null, ts: tick ? new Date(tick.ts).toISOString() : null };
   }
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { BrokerAccountView, CopyOrderView, MasterTradeView, StrategyFollowerView, StrategyView } from '@ctp/types';
+import type { BrokerAccountView, CopyOrderView, MarketFeedStatus, MasterTradeView, StrategyFollowerView, StrategyView } from '@ctp/types';
 import { api } from './api';
 
 export interface LiveOrder {
@@ -91,6 +91,11 @@ export interface FollowInput {
   fixedQuantity?: number;
   maxQuantity?: number;
   maxTradeValue?: number;
+  fixedLots?: number;
+  maxLots?: number;
+  maxDailyLoss?: number;
+  maxTradesPerDay?: number;
+  allowedSegments?: ('EQ' | 'FO')[];
 }
 
 const LIVE_MS = 10_000;
@@ -158,6 +163,49 @@ export function useToggleCopy() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, action }: { id: string; action: 'start' | 'stop' }) => api<StrategyFollowerView>(`/follow/subscriptions/${id}/${action}`, { method: 'POST' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['follow'] }),
+  });
+}
+
+// ---------------------------------------------------------- live feed / speed / risk
+export interface LatencySnapshot {
+  todayCount: number;
+  todayAvgMs: number | null;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  lastMs: number | null;
+  dbTodayAvgMs?: number | null;
+  dbTodayCount?: number;
+}
+/** Feed status: pushed over the socket every 5 s (see RealtimeProvider), polled as a fallback. */
+export const useFeedStatus = () =>
+  useQuery({ queryKey: ['trading', 'feed-status'], queryFn: () => api<MarketFeedStatus>('/market/feed/status'), refetchInterval: 15_000 });
+export function useFeedAction() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { kind: 'restart' } | { kind: 'broker'; broker: 'ZERODHA' | 'ANGEL_ONE' } | { kind: 'subscribe' | 'unsubscribe'; instruments: string[] }) =>
+      a.kind === 'restart'
+        ? api<MarketFeedStatus>('/market/feed/restart', { method: 'POST' })
+        : a.kind === 'broker'
+          ? api<MarketFeedStatus>('/market/feed/broker', { method: 'POST', body: { broker: a.broker } })
+          : api<MarketFeedStatus>(`/market/feed/${a.kind}`, { method: 'POST', body: { instruments: a.instruments } }),
+    onSuccess: (st) => qc.setQueryData(['trading', 'feed-status'], st),
+  });
+}
+export const useMasterLatency = (enabled = true) =>
+  useQuery({ queryKey: ['trading', 'latency'], queryFn: () => api<LatencySnapshot>('/master/latency'), refetchInterval: 15_000, enabled });
+export const useAdminLatency = () => useQuery({ queryKey: ['admin', 'latency'], queryFn: () => api<LatencySnapshot>('/admin/copy-trading/latency'), refetchInterval: 15_000 });
+export function useExitStrategy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api<{ orders: number; failed: number }>(`/master/strategies/${id}/exit-all`, { method: 'POST' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['master'] }),
+  });
+}
+export function useExitAllMine() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<{ orders: number; failed: number }>('/follow/exit-all', { method: 'POST' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['follow'] }),
   });
 }

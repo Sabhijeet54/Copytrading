@@ -1,17 +1,17 @@
 'use client';
 
-import { ArrowRight, CheckCircle2, MailWarning, Wallet } from 'lucide-react';
+import { ArrowRight, CheckCircle2, MailWarning } from 'lucide-react';
 import Link from 'next/link';
 import { Suspense } from 'react';
-import { toast } from 'sonner';
+import { BrokerAccountCard } from '@/components/broker-account-card';
 import { BrokerCallbackNotice, BrokerConnectButtons } from '@/components/broker-connect';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { brokerLabel, formatDateTime, humanize } from '@/lib/format';
-import { useDisconnectBroker, useMe, useMyBrokerAccounts } from '@/lib/queries';
+import { formatDateTime, humanize } from '@/lib/format';
+import { useMe, useMyBrokerAccounts } from '@/lib/queries';
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -25,7 +25,6 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 export default function DashboardPage() {
   const { data: user } = useMe();
   const accounts = useMyBrokerAccounts();
-  const disconnect = useDisconnectBroker();
   if (!user) return null;
   const angel = accounts.data?.find((a) => a.broker === 'ANGEL_ONE');
 
@@ -54,7 +53,7 @@ export default function DashboardPage() {
             <CardTitle>Trading account</CardTitle>
             <CardDescription>
               {user.role === 'MASTER'
-                ? 'Your trades are detected from this broker account — you keep trading in the broker’s own app.'
+                ? 'Master account is used for LIVE MARKET DATA only (never places orders). Trades you take are mirrored to your clients.'
                 : 'Copied orders are placed in this broker account. Connecting a broker never starts copying by itself.'}
             </CardDescription>
           </CardHeader>
@@ -62,42 +61,9 @@ export default function DashboardPage() {
             {accounts.isLoading ? (
               <Skeleton className="h-16 w-full" />
             ) : accounts.data && accounts.data.length > 0 ? (
-              <div className="divide-y rounded-lg border">
+              <div className="grid gap-3">
                 {accounts.data.map((a) => (
-                  <div key={a.id} className="p-3">
-                    <div className="flex items-center justify-between">
-                      <span className="flex items-center gap-2 font-medium">
-                        <Wallet className="size-4 text-muted-foreground" />
-                        {brokerLabel(a.broker)}
-                      </span>
-                      <StatusBadge value={a.status} />
-                    </div>
-                    <div className="mt-2 divide-y">
-                      <Row label="Client ID">{a.brokerClientId ?? '—'}</Row>
-                      <Row label="Token status">
-                        <StatusBadge value={a.tokenStatus} />
-                      </Row>
-                      {a.tokenExpiresAt ? <Row label="Token expiry">{formatDateTime(a.tokenExpiresAt)}</Row> : null}
-                      {a.lastError && a.tokenStatus !== 'ACTIVE' ? <Row label="Last error">{a.lastError}</Row> : null}
-                    </div>
-                    {a.status === 'CONNECTED' ? (
-                      <div className="mt-2 flex justify-end">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={disconnect.isPending}
-                          onClick={() =>
-                            disconnect.mutate(a.id, {
-                              onSuccess: () => toast.success(`${brokerLabel(a.broker)} disconnected`),
-                              onError: (err) => toast.error(err.message),
-                            })
-                          }
-                        >
-                          Disconnect
-                        </Button>
-                      </div>
-                    ) : null}
-                  </div>
+                  <BrokerAccountCard key={a.id} account={a} />
                 ))}
               </div>
             ) : (

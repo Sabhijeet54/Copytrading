@@ -43,6 +43,12 @@ enum BrokerAccountStatus {
   ERROR
 }
 
+/// TRADING = copy orders may be placed. DATA_ONLY = master feed account: live market data only, never orders.
+enum BrokerAccountMode {
+  TRADING
+  DATA_ONLY
+}
+
 enum StrategyStatus {
   DRAFT
   ACTIVE
@@ -162,6 +168,11 @@ enum AuditAction {
   ADMIN_STOPPED_COPY
   ADMIN_RESUMED_COPY
   ADMIN_DISCONNECTED_BROKER
+  BROKER_TAKEN_OVER
+  BROKER_TOKEN_EXPIRED
+  KILL_SWITCH_ACTIVATED
+  AUTO_SQUARE_OFF
+  RISK_LIMIT_HIT
 }
 
 // =====================================================================
@@ -180,6 +191,8 @@ model User {
   lastLoginAt     DateTime?
   disabledAt      DateTime?
   disabledReason  String?
+  /// Optional Telegram chat id for personal alerts (order fill/fail, disconnect, loss limit).
+  telegramChatId  String?
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 
@@ -245,9 +258,14 @@ model BrokerAccount {
   brokerClientId  String? // broker's user/client id (e.g. Kite user_id). Not a secret.
   status          BrokerAccountStatus @default(PENDING)
   isPaper         Boolean             @default(false)
+  /// MASTER accounts are DATA_ONLY (market feed). Order placement is hard-blocked for DATA_ONLY.
+  mode            BrokerAccountMode   @default(TRADING)
   tokenExpiresAt  DateTime?
   lastConnectedAt DateTime?
   lastError       String?
+  /// Why the account is DISCONNECTED / EXPIRED (shown on the account card).
+  disconnectReason String?
+  disconnectedAt   DateTime?
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
 
@@ -261,8 +279,11 @@ model BrokerAccount {
   transactions Transaction[]
 
   @@unique([userId, broker])
-  // A single real broker account can only be linked to one platform user.
-  @@unique([broker, brokerClientId])
+  // A real broker account may be CONNECTED to only one platform user at a time. This is enforced by
+  // the PARTIAL unique index "BrokerAccount_connected_client_key" (WHERE status = 'CONNECTED'),
+  // created in raw SQL in migration 20261013000000_broker_takeover — Prisma cannot express it here.
+  // Connecting the same client ID from a new user disconnects the previous user (takeover).
+  @@index([broker, brokerClientId])
   @@index([status])
 }
 
@@ -344,6 +365,14 @@ model StrategyFollower {
   allocationAmount  Decimal?       @db.Decimal(18, 2)
   allocationPercent Decimal?       @db.Decimal(5, 2)
   fixedQuantity     Int?
+  /// FIXED_QUANTITY alternative: number of lots (qty = fixedLots × lot size).
+  fixedLots         Int?
+  /// Hard cap on lots per copied order.
+  maxLots           Int?
+  /// Max copied orders per IST trading day.
+  maxTradesPerDay   Int?
+  /// Allowed segments: "EQ", "FO". Empty = all.
+  allowedSegments   String[]       @default([])
   riskLevel         RiskLevel?
   maxTradeValue     Decimal?       @db.Decimal(18, 2)
   maxDailyLoss      Decimal?       @db.Decimal(18, 2)
@@ -432,6 +461,8 @@ model CopyOrder {
   errorCode          String?
   errorMessage       String?
   attempts           Int         @default(0)
+  /// Master trade detected → broker acknowledged this order (ms).
+  latencyMs          Int?
   lastAttemptAt      DateTime?
   submittedAt        DateTime?
   filledAt           DateTime?

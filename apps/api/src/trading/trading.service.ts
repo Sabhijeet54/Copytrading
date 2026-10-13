@@ -4,9 +4,8 @@ import { PRISMA } from '../common/prisma/prisma.service';
 import { API_CONFIG, ApiConfig } from '../config/config.module';
 import { BrokerApiError } from '../brokers/broker-http';
 import { BrokerSessionService } from '../brokers/broker-session.service';
-import { AngelOneAdapter } from './angel.adapter';
-import type { BrokerAdapter, BrokerFunds, BrokerHolding, BrokerOrder, BrokerPosition } from './broker-adapter';
-import { ZerodhaAdapter } from './zerodha.adapter';
+import { ADAPTERS } from './adapter-factory';
+import { OrderBlockedError, type BrokerAdapter, type BrokerFunds, type BrokerHolding, type BrokerOrder, type BrokerPosition } from './broker-adapter';
 
 export interface LiveAccountData {
   accountId: string;
@@ -35,35 +34,42 @@ export class TradingService {
     return this.config.PAPER_MODE || account.isPaper || account.broker === 'MOCK';
   }
 
+  /** Hard guard used before every order: DATA_ONLY (master) accounts can never place orders. */
+  assertOrderAllowed(account: Pick<BrokerAccount, 'mode' | 'id'>): void {
+    if (account.mode === 'DATA_ONLY') throw new OrderBlockedError();
+  }
+
+  /** Builds an adapter from an already-decrypted token (no DB access). */
+  buildAdapter(account: Pick<BrokerAccount, 'broker' | 'mode'>, token: string): BrokerAdapter {
+    const f = ADAPTERS[account.broker];
+    if (!f) throw new BrokerApiError(`${account.broker} has no live broker adapter.`);
+    return f.create(this.config, token, account);
+  }
+
   /** Throws when the account cannot be used for a real broker call (not connected / token expired). */
   async adapterFor(account: BrokerAccount): Promise<BrokerAdapter> {
     if (account.broker === 'MOCK') throw new BrokerApiError('Paper (MOCK) accounts have no broker connection.');
     if (account.status !== 'CONNECTED') throw new BrokerApiError(`${account.broker} account is not connected. Please log in again.`);
     if (account.tokenExpiresAt && account.tokenExpiresAt.getTime() <= Date.now()) {
-      await this.prisma.brokerAccount.update({ where: { id: account.id }, data: { status: 'EXPIRED' } }).catch(() => undefined);
+      await this.sessions.markExpired(account, 'Daily broker token expired — please reconnect.').catch(() => undefined);
       throw new BrokerApiError(`${account.broker} session expired. Please log in again.`);
     }
     const token = await this.sessions.decryptAccess(account);
     if (!token) throw new BrokerApiError('No broker session stored. Please log in again.');
-    const c = this.config;
-    if (account.broker === 'ZERODHA') {
-      if (!c.ZERODHA_API_KEY) throw new BrokerApiError('Zerodha is not configured on the server.');
-      return new ZerodhaAdapter(c.ZERODHA_API_KEY, token, c.ZERODHA_PROXY_URL);
-    }
-    if (!c.ANGEL_API_KEY) throw new BrokerApiError('Angel One is not configured on the server.');
-    return new AngelOneAdapter(
-      { apiKey: c.ANGEL_API_KEY, publicIp: c.ANGEL_PUBLIC_IP, localIp: c.ANGEL_LOCAL_IP, macAddress: c.ANGEL_MAC_ADDRESS, proxyUrl: c.ANGEL_PROXY_URL },
-      token,
-    );
+    return this.buildAdapter(account, token);
   }
 
-  /** Marks the account EXPIRED when the broker says the session is invalid. */
+  /** True when a broker error means the session is no longer valid. */
+  isSessionError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : '';
+    return err instanceof BrokerApiError && (err.status === 403 || err.brokerCode === 'TokenException' || /token|session|AG8001|invalid jwt/i.test(msg));
+  }
+
+  /** Marks the account EXPIRED (and notifies the owner) when the broker says the session is invalid. */
   async handleBrokerError(account: BrokerAccount, err: unknown): Promise<string> {
     const msg = err instanceof Error ? err.message : 'Broker error';
-    if (err instanceof BrokerApiError && (err.status === 403 || err.brokerCode === 'TokenException' || /token|session|AG8001|invalid jwt/i.test(msg))) {
-      await this.prisma.brokerAccount
-        .update({ where: { id: account.id }, data: { status: 'EXPIRED', lastError: msg.slice(0, 500) } })
-        .catch(() => undefined);
+    if (this.isSessionError(err)) {
+      await this.sessions.markExpired(account, `Broker rejected the session: ${msg}`).catch(() => undefined);
     }
     return msg;
   }

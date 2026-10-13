@@ -7,6 +7,7 @@ const ENUMS = [
   'UserStatus',
   'BrokerName',
   'BrokerAccountStatus',
+  'BrokerAccountMode',
   'StrategyStatus',
   'RiskLevel',
   'AllocationMode',

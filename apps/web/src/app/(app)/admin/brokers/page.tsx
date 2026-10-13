@@ -19,7 +19,7 @@ import { brokerLabel, formatDateTime } from '@/lib/format';
 import { useAdminAction, useAdminBrokerAccounts } from '@/lib/queries';
 import { useListState } from '@/lib/use-list-state';
 
-const COLS = 8;
+const COLS = 9;
 
 export default function AdminBrokersPage() {
   const list = useListState({ broker: '', status: '' });
@@ -29,7 +29,15 @@ export default function AdminBrokersPage() {
 
   return (
     <>
-      <PageHeader title="Broker accounts" description="Connections between platform users and their broker accounts. Tokens are encrypted and never displayed." />
+      <PageHeader
+        title="Broker accounts"
+        description="Connections between platform users and their broker accounts. Tokens are encrypted and never displayed."
+        actions={
+          <Button size="sm" variant={list.filters.status === 'CONNECTED' ? 'default' : 'outline'} onClick={() => list.setFilter('status', list.filters.status === 'CONNECTED' ? '' : 'CONNECTED')}>
+            {list.filters.status === 'CONNECTED' ? 'Show all' : 'Connected now'}
+          </Button>
+        }
+      />
       <Card className="overflow-hidden">
         <FilterBar onReset={list.reset} active={list.active}>
           <Field label="Broker">
@@ -46,9 +54,10 @@ export default function AdminBrokersPage() {
               <TableHead>Broker</TableHead>
               <TableHead>Client ID</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>Role</TableHead>
               <TableHead>Token</TableHead>
               <TableHead>Token expiry</TableHead>
-              <TableHead>Last connected</TableHead>
+              <TableHead>Last connected / reason</TableHead>
               <TableHead className="text-right">Action</TableHead>
             </TableRow>
           </TableHeader>
@@ -73,15 +82,19 @@ export default function AdminBrokersPage() {
                   <TableCell>
                     <StatusBadge value={a.status} />
                   </TableCell>
+                  <TableCell className="text-xs">{a.mode === 'DATA_ONLY' ? 'Master (data)' : 'Client'}</TableCell>
                   <TableCell>
                     <StatusBadge value={a.tokenStatus} />
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">{a.isPaper ? 'n/a (paper)' : formatDateTime(a.tokenExpiresAt)}</TableCell>
-                  <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(a.lastConnectedAt)}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    <div className="whitespace-nowrap">{formatDateTime(a.lastConnectedAt)}</div>
+                    {a.status !== 'CONNECTED' && a.disconnectReason ? <div className="max-w-56 text-xs text-destructive">{a.disconnectReason}</div> : null}
+                  </TableCell>
                   <TableCell className="text-right">
                     {a.status !== 'DISCONNECTED' ? (
                       <Button size="sm" variant="outline" onClick={() => setTarget({ id: a.id, label: `${a.userName} · ${brokerLabel(a.broker)}` })}>
-                        <Unplug /> Disconnect
+                        <Unplug /> Force Disconnect
                       </Button>
                     ) : null}
                   </TableCell>
@@ -95,9 +108,9 @@ export default function AdminBrokersPage() {
       <ReasonDialog
         open={target !== null}
         onOpenChange={(o) => !o && setTarget(null)}
-        title={`Disconnect ${target?.label ?? ''}?`}
-        description="Deletes the stored broker session and stops any copy trading through this account."
-        confirmLabel="Disconnect"
+        title={`Force disconnect ${target?.label ?? ''}?`}
+        description="Logs out the broker session, deletes the stored token, stops copy trading through this account and notifies the user."
+        confirmLabel="Force Disconnect"
         pending={disconnect.isPending}
         onConfirm={(reason) =>
           target &&

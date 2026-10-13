@@ -56,7 +56,25 @@ export interface BrokerFunds {
   net: number | null;
 }
 
+export interface AdapterOptions {
+  /** DATA_ONLY (master feed) accounts: placeOrder is hard-blocked. */
+  dataOnly?: boolean;
+}
+
+/** Thrown when an order is attempted on a DATA_ONLY (master) account. Never retried. */
+export class OrderBlockedError extends Error {
+  constructor(message = 'Order blocked: this is a DATA_ONLY master account (live market data only).') {
+    super(message);
+    this.name = 'OrderBlockedError';
+  }
+}
+
+export function assertCanTrade(opts: AdapterOptions | undefined): void {
+  if (opts?.dataOnly) throw new OrderBlockedError();
+}
+
 export interface BrokerAdapter {
+  readonly broker: string;
   placeOrder(input: PlaceOrderInput): Promise<{ brokerOrderId: string }>;
   orders(): Promise<BrokerOrder[]>;
   positions(): Promise<BrokerPosition[]>;
@@ -84,3 +102,7 @@ export const num = (v: unknown): number | null => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
+
+/** F&O exchanges (segment "FO"); everything else counts as "EQ" for allowed-segment checks. */
+export const FO_EXCHANGES: Exchange[] = ['NFO', 'BFO', 'MCX', 'CDS', 'BCD'];
+export const segmentOf = (exchange: Exchange): 'EQ' | 'FO' => (FO_EXCHANGES.includes(exchange) ? 'FO' : 'EQ');

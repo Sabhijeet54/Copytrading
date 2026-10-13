@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Pause, Pencil, Play, Plus, Users } from 'lucide-react';
+import { LogOut, Pause, Pencil, Play, Plus, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import type { StrategyView } from '@ctp/types';
 import { LiveAccountCard, PaperPositionsCard, Pnl } from '@/components/live-account';
+import { MarketFeedPanel } from '@/components/market-feed-panel';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
@@ -28,6 +29,7 @@ import {
   useSaveStrategy,
   useStrategyFollowers,
   useStrategyStatus,
+  useExitStrategy,
 } from '@/lib/trading';
 
 const EXCHANGES = ['NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS', 'BCD'];
@@ -491,6 +493,8 @@ export default function MasterDeskPage() {
   const strategies = useMasterStrategies();
   const live = useMasterLive();
   const status = useStrategyStatus();
+  const exitAll = useExitStrategy();
+  const [exitTarget, setExitTarget] = useState<StrategyView | null>(null);
   const [edit, setEdit] = useState<{ open: boolean; s?: StrategyView | null }>({ open: false });
   const [selected, setSelected] = useState<string | null>(null);
   const list = strategies.data ?? [];
@@ -514,6 +518,7 @@ export default function MasterDeskPage() {
       ) : null}
 
       <div className="grid gap-4">
+        <MarketFeedPanel />
         <Card>
           <CardHeader>
             <CardTitle>Strategies</CardTitle>
@@ -561,6 +566,9 @@ export default function MasterDeskPage() {
                           <Button size="sm" variant="ghost" title="Edit" onClick={() => setEdit({ open: true, s })}>
                             <Pencil />
                           </Button>
+                          <Button size="sm" variant="ghost" title="Exit all client positions" onClick={() => setExitTarget(s)}>
+                            <LogOut />
+                          </Button>
                           {s.status === 'ACTIVE' ? (
                             <Button size="sm" variant="outline" disabled={status.isPending} onClick={() => status.mutate({ id: s.id, status: 'PAUSED' }, { onError: (e) => toast.error(e.message) })}>
                               <Pause /> Pause
@@ -596,6 +604,32 @@ export default function MasterDeskPage() {
         {live.data && live.data.paperPositions.length > 0 ? <PaperPositionsCard rows={live.data.paperPositions} /> : null}
       </div>
 
+      <Dialog open={!!exitTarget} onOpenChange={(o) => !o && setExitTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Exit all client positions · {exitTarget?.name}?</DialogTitle>
+            <DialogDescription>Places MARKET exit orders for every open copy position of this strategy in all client accounts.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setExitTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={exitAll.isPending}
+              onClick={() =>
+                exitTarget &&
+                exitAll.mutate(exitTarget.id, {
+                  onSuccess: (r) => (toast.success(`${r.orders} exit order(s) sent${r.failed ? `, ${r.failed} failed` : ''}`), setExitTarget(null)),
+                  onError: (e) => toast.error(e.message),
+                })
+              }
+            >
+              {exitAll.isPending ? 'Exiting…' : 'Exit all'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <StrategyDialog open={edit.open} strategy={edit.s} onOpenChange={(o) => setEdit((p) => ({ ...p, open: o }))} />
     </>
   );

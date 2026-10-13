@@ -1,4 +1,5 @@
 import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Inject, NotFoundException, Param, Post, Req } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import type { PrismaClient } from '@ctp/database';
 import { AuditService } from '../audit/audit.service';
@@ -8,6 +9,8 @@ import { toCopyOrderView, toStrategyFollowerView, toStrategyView } from '../comm
 import { PRISMA } from '../common/prisma/prisma.service';
 import { FollowDto } from './trading.dto';
 import { TradingService } from './trading.service';
+import { RiskService } from './risk.service';
+import { AccountEvents } from '../realtime/account-events';
 
 /** Client (follower) side: discover strategies, subscribe, start/stop copying, and see own portfolio. */
 @Roles('FOLLOWER')
@@ -17,6 +20,8 @@ export class FollowerController {
     @Inject(PRISMA) private readonly prisma: PrismaClient,
     private readonly trading: TradingService,
     private readonly audit: AuditService,
+    private readonly risk: RiskService,
+    private readonly accountEvents: AccountEvents,
   ) {}
 
   @Get('strategies')
@@ -51,7 +56,8 @@ export class FollowerController {
     if (!s || s.status === 'ARCHIVED' || s.status === 'DRAFT') throw new NotFoundException('Strategy not available');
     const account = await this.prisma.brokerAccount.findFirst({ where: { id: dto.brokerAccountId, userId: user.id } });
     if (!account) throw new BadRequestException('Choose one of your broker accounts');
-    if (dto.allocationMode === 'FIXED_QUANTITY' && !dto.fixedQuantity) throw new BadRequestException('Fixed quantity is required');
+    if (account.mode === 'DATA_ONLY') throw new BadRequestException('This account is a data-only (master) account and cannot receive orders.');
+    if (dto.allocationMode === 'FIXED_QUANTITY' && !dto.fixedQuantity && !dto.fixedLots) throw new BadRequestException('Fixed quantity or fixed lots is required');
     if (dto.allocationMode === 'CAPITAL_PERCENTAGE' && !dto.allocationPercent) throw new BadRequestException('Allocation % is required');
     if (dto.allocationMode === 'PROPORTIONAL' && !dto.allocationAmount) throw new BadRequestException('Capital amount is required');
     const existing = await this.prisma.strategyFollower.findUnique({ where: { strategyId_followerUserId: { strategyId: id, followerUserId: user.id } } });
@@ -62,8 +68,13 @@ export class FollowerController {
       allocationAmount: dto.allocationAmount ?? null,
       allocationPercent: dto.allocationPercent ?? null,
       fixedQuantity: dto.fixedQuantity ?? null,
+      fixedLots: dto.fixedLots ?? null,
+      maxLots: dto.maxLots ?? null,
       maxQuantity: dto.maxQuantity ?? null,
       maxTradeValue: dto.maxTradeValue ?? null,
+      maxDailyLoss: dto.maxDailyLoss ?? null,
+      maxTradesPerDay: dto.maxTradesPerDay ?? null,
+      allowedSegments: dto.allowedSegments ?? [],
     };
     const row = await this.prisma.strategyFollower.upsert({
       where: { strategyId_followerUserId: { strategyId: id, followerUserId: user.id } },
@@ -72,6 +83,7 @@ export class FollowerController {
       include: { strategy: { select: { name: true } } },
     });
     await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: user.id, targetType: 'StrategyFollower', targetId: row.id, metadata: { strategyId: id, ...dto }, client: clientInfo(req) });
+    this.accountEvents.emit({ type: 'settings', brokerAccountId: account.id, userId: user.id });
     return toStrategyFollowerView(row);
   }
 
@@ -85,6 +97,7 @@ export class FollowerController {
       const a = sub.brokerAccount;
       if (!a) throw new BadRequestException('Select a broker account first');
       if (a.broker !== 'MOCK' && a.status !== 'CONNECTED') throw new BadRequestException('Your broker is not connected — log in to your broker first.');
+      if (a.mode === 'DATA_ONLY') throw new BadRequestException('A data-only (master) account cannot be used for copy trading.');
     }
     const row = await this.prisma.strategyFollower.update({
       where: { id },
@@ -95,7 +108,17 @@ export class FollowerController {
       include: { strategy: { select: { name: true } } },
     });
     await this.audit.log({ action: action === 'start' ? 'COPY_STARTED' : 'COPY_STOPPED', actorUserId: user.id, targetType: 'StrategyFollower', targetId: id, client: clientInfo(req) });
+    this.accountEvents.emit({ type: 'settings', brokerAccountId: sub.brokerAccountId ?? '', userId: user.id });
     return toStrategyFollowerView(row);
+  }
+
+  /** Personal kill switch: stop all my copying and exit all my open positions (MARKET). */
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('exit-all')
+  async exitAll(@CurrentUser() user: RequestUser) {
+    const results = await this.risk.exitAllForUser(user.id);
+    return { orders: results.reduce((s, r) => s + r.orders, 0), failed: results.reduce((s, r) => s + r.failed, 0), results };
   }
 
   // ------------------------------------------------------------- portfolio

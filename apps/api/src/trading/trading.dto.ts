@@ -59,4 +59,9 @@ export class FollowDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) fixedQuantity?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) maxQuantity?: number;
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) maxTradeValue?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) fixedLots?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) maxLots?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) maxDailyLoss?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) maxTradesPerDay?: number;
+  @IsOptional() @IsArray() @ArrayUnique() @IsIn(['EQ', 'FO'], { each: true }) allowedSegments?: ('EQ' | 'FO')[];
 }

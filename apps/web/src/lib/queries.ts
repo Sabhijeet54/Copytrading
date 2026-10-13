@@ -86,7 +86,7 @@ export function useLogout() {
 export function useUpdateProfile() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { name?: string; mobile?: string }) => api<AuthUser>('/users/me', { method: 'PATCH', body }),
+    mutationFn: (body: { name?: string; mobile?: string; telegramChatId?: string }) => api<AuthUser>('/users/me', { method: 'PATCH', body }),
     onSuccess: (user) => qc.setQueryData(qk.me, user),
   });
 }

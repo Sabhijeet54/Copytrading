@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { IoAdapter } from '@nestjs/platform-socket.io';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
@@ -53,6 +54,7 @@ export function configureApp(app: NestExpressApplication): void {
       validationError: { target: false, value: false },
     }),
   );
+  app.useWebSocketAdapter(new IoAdapter(app));
   app.enableShutdownHooks();
 }
 

@@ -11,11 +11,12 @@ import { useChangePassword, useMe, useUpdateProfile } from '@/lib/queries';
 
 const PASSWORD_RULE = /^(?=.*[A-Za-z])(?=.*\d).{10,128}$/;
 
-function ProfileForm({ name: initialName, mobile: initialMobile }: { name: string; mobile: string }) {
+function ProfileForm({ name: initialName, mobile: initialMobile, telegram: initialTelegram }: { name: string; mobile: string; telegram: string }) {
   const update = useUpdateProfile();
   const [name, setName] = useState(initialName);
   const [mobile, setMobile] = useState(initialMobile);
-  const dirty = name !== initialName || mobile !== initialMobile;
+  const [telegramChatId, setTelegram] = useState(initialTelegram);
+  const dirty = name !== initialName || mobile !== initialMobile || telegramChatId !== initialTelegram;
 
   return (
     <form
@@ -23,7 +24,7 @@ function ProfileForm({ name: initialName, mobile: initialMobile }: { name: strin
       onSubmit={(e) => {
         e.preventDefault();
         update.mutate(
-          { name, mobile },
+          { name, mobile, telegramChatId },
           { onSuccess: () => toast.success('Profile updated'), onError: (err) => toast.error(err.message) },
         );
       }}
@@ -35,6 +36,11 @@ function ProfileForm({ name: initialName, mobile: initialMobile }: { name: strin
       <div className="grid gap-2">
         <Label htmlFor="mobile">Mobile</Label>
         <Input id="mobile" type="tel" placeholder="+91XXXXXXXXXX" value={mobile} onChange={(e) => setMobile(e.target.value)} />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="tg">Telegram chat ID (alerts)</Label>
+        <Input id="tg" inputMode="numeric" placeholder="e.g. 123456789" value={telegramChatId} onChange={(e) => setTelegram(e.target.value)} />
+        <p className="text-xs text-muted-foreground">Order fill/fail, disconnect and loss-limit alerts. Start a chat with the platform bot, then paste your chat id.</p>
       </div>
       <div>
         <Button type="submit" disabled={!dirty || update.isPending}>
@@ -113,7 +119,7 @@ export default function SettingsPage() {
             <CardDescription>{user.email}</CardDescription>
           </CardHeader>
           <CardContent>
-            <ProfileForm key={`${user.name}|${user.mobile}`} name={user.name} mobile={user.mobile ?? ''} />
+            <ProfileForm key={`${user.name}|${user.mobile}|${user.telegramChatId ?? ''}`} name={user.name} mobile={user.mobile ?? ''} telegram={user.telegramChatId ?? ''} />
           </CardContent>
         </Card>
         <Card>

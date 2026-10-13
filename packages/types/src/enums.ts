@@ -33,6 +33,12 @@ export const BrokerAccountStatus = {
 } as const;
 export type BrokerAccountStatus = (typeof BrokerAccountStatus)[keyof typeof BrokerAccountStatus];
 
+export const BrokerAccountMode = {
+  TRADING: 'TRADING',
+  DATA_ONLY: 'DATA_ONLY',
+} as const;
+export type BrokerAccountMode = (typeof BrokerAccountMode)[keyof typeof BrokerAccountMode];
+
 export const StrategyStatus = {
   DRAFT: 'DRAFT',
   ACTIVE: 'ACTIVE',
@@ -165,5 +171,10 @@ export const AuditAction = {
   ADMIN_STOPPED_COPY: 'ADMIN_STOPPED_COPY',
   ADMIN_RESUMED_COPY: 'ADMIN_RESUMED_COPY',
   ADMIN_DISCONNECTED_BROKER: 'ADMIN_DISCONNECTED_BROKER',
+  BROKER_TAKEN_OVER: 'BROKER_TAKEN_OVER',
+  BROKER_TOKEN_EXPIRED: 'BROKER_TOKEN_EXPIRED',
+  KILL_SWITCH_ACTIVATED: 'KILL_SWITCH_ACTIVATED',
+  AUTO_SQUARE_OFF: 'AUTO_SQUARE_OFF',
+  RISK_LIMIT_HIT: 'RISK_LIMIT_HIT',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];

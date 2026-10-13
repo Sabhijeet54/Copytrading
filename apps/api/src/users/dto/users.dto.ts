@@ -17,6 +17,13 @@ export class UpdateProfileDto {
   @ValidateIf((_o, v) => v !== '')
   @Matches(/^\+?[0-9]{10,15}$/, { message: 'Enter a valid mobile number' })
   mobile?: string;
+
+  /** Telegram chat id for personal alerts. Empty string clears it. */
+  @IsOptional()
+  @Transform(trim)
+  @ValidateIf((_o, v) => v !== '')
+  @Matches(/^-?\d{4,20}$/, { message: 'Enter a numeric Telegram chat id' })
+  telegramChatId?: string;
 }
 
 export class ChangePasswordDto {

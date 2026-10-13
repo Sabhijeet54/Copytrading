@@ -1,8 +1,13 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { clientInfo } from '../common/client-info';
 import { CurrentUser, RequestUser, Roles } from '../common/decorators/auth.decorators';
 import { AdminService } from './admin.service';
+import { CopyEngineService } from '../trading/copy-engine.service';
+import { RiskService } from '../trading/risk.service';
+import { PRISMA } from '../common/prisma/prisma.service';
+import type { PrismaClient } from '@ctp/database';
+import { startOfTradingDayIST } from './admin.service';
 import {
   AdminAuditLogsQueryDto,
   AdminBrokerAccountsQueryDto,
@@ -20,7 +25,35 @@ import {
 @Roles('ADMIN')
 @Controller('admin')
 export class AdminController {
-  constructor(private readonly admin: AdminService) {}
+  constructor(
+    private readonly admin: AdminService,
+    private readonly risk: RiskService,
+    private readonly engine: CopyEngineService,
+    @Inject(PRISMA) private readonly prisma: PrismaClient,
+  ) {}
+
+  /** KILL SWITCH: halt copying, turn every subscription OFF and exit all open client positions. */
+  @Post('kill-switch')
+  killSwitch(@CurrentUser() me: RequestUser, @Body() dto: ReasonDto) {
+    return this.risk.killSwitch(me.id, dto.reason);
+  }
+
+  /** Manual square-off of all INTRADAY client positions (same as the auto square-off). */
+  @Post('square-off')
+  squareOff() {
+    return this.risk.squareOffAll({ intradayOnly: true });
+  }
+
+  /** Copy order latency: in-memory p50/p95 + today's DB average. */
+  @Get('copy-trading/latency')
+  async latency() {
+    const agg = await this.prisma.copyOrder.aggregate({
+      where: { createdAt: { gte: startOfTradingDayIST() }, latencyMs: { not: null }, isPaper: false },
+      _avg: { latencyMs: true },
+      _count: true,
+    });
+    return { ...this.engine.latency.snapshot(), dbTodayAvgMs: agg._avg.latencyMs ? Math.round(agg._avg.latencyMs) : null, dbTodayCount: agg._count };
+  }
 
   @Get('dashboard')
   dashboard() {

@@ -8,13 +8,18 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import type Redis from 'ioredis';
+import { Prisma } from '@ctp/database';
 import type { BrokerAccount, BrokerName, PrismaClient } from '@ctp/database';
 import { generateToken, SecretBox } from '@ctp/shared';
+import { type BrokerEventPayload, WsEvent } from '@ctp/types';
 import { AuditService } from '../audit/audit.service';
 import type { ClientInfo } from '../auth/token.service';
 import { PRISMA } from '../common/prisma/prisma.service';
 import { REDIS } from '../common/redis/redis.module';
 import { API_CONFIG, ApiConfig } from '../config/config.module';
+import { AccountEvents } from '../realtime/account-events';
+import { NotifyService } from '../realtime/notify.service';
+import { RealtimeService } from '../realtime/realtime.gateway';
 import { AngelOneClient } from './angel-one/angel-one.client';
 import { BrokerApiError } from './broker-http';
 import { ZerodhaClient } from './zerodha/zerodha.client';
@@ -22,12 +27,25 @@ import { ZerodhaClient } from './zerodha/zerodha.client';
 const STATE_TTL_SECONDS = 600;
 const stateKey = (state: string) => `broker:oauth-state:${state}`;
 
+export const TAKEOVER_REASON = 'Account doosre user ne connect kar liya';
+
 interface SessionMaterial {
   brokerClientId: string;
   accessToken: string;
   refreshToken?: string;
   extra?: Record<string, string | undefined>;
   expiresAt: Date;
+}
+
+export interface DisconnectOptions {
+  /** Who initiated it — stored in the audit log. */
+  by: 'user' | 'admin' | 'system';
+  /** Shown on the account card. */
+  reason?: string;
+  /** Admin id when by=admin. */
+  actorUserId?: string;
+  /** Also stop copy trading for subscriptions using this account. */
+  stopCopy?: boolean;
 }
 
 /**
@@ -38,12 +56,17 @@ interface SessionMaterial {
 export class BrokerSessionService {
   private readonly logger = new Logger('BrokerSession');
   private readonly box: SecretBox;
+  private zerodhaClient?: ZerodhaClient;
+  private angelClient?: AngelOneClient;
 
   constructor(
     @Inject(API_CONFIG) private readonly config: ApiConfig,
     @Inject(PRISMA) private readonly prisma: PrismaClient,
     @Inject(REDIS) private readonly redis: Redis,
     private readonly audit: AuditService,
+    private readonly realtime: RealtimeService,
+    private readonly notifier: NotifyService,
+    private readonly accountEvents: AccountEvents,
   ) {
     this.box = new SecretBox(config.ENCRYPTION_KEY);
   }
@@ -55,19 +78,19 @@ export class BrokerSessionService {
     if (!ZERODHA_API_KEY || !ZERODHA_API_SECRET) {
       throw new ServiceUnavailableException('Zerodha is not configured (ZERODHA_API_KEY / ZERODHA_API_SECRET).');
     }
-    return new ZerodhaClient({ apiKey: ZERODHA_API_KEY, apiSecret: ZERODHA_API_SECRET, proxyUrl: ZERODHA_PROXY_URL });
+    return (this.zerodhaClient ??= new ZerodhaClient({ apiKey: ZERODHA_API_KEY, apiSecret: ZERODHA_API_SECRET, proxyUrl: ZERODHA_PROXY_URL }));
   }
 
   angelOne(): AngelOneClient {
     const c = this.config;
     if (!c.ANGEL_API_KEY) throw new ServiceUnavailableException('Angel One is not configured (ANGEL_API_KEY).');
-    return new AngelOneClient({
+    return (this.angelClient ??= new AngelOneClient({
       apiKey: c.ANGEL_API_KEY,
       publicIp: c.ANGEL_PUBLIC_IP,
       localIp: c.ANGEL_LOCAL_IP,
       macAddress: c.ANGEL_MAC_ADDRESS,
       proxyUrl: c.ANGEL_PROXY_URL,
-    });
+    }));
   }
 
   // --------------------------------------------------------------- state
@@ -90,26 +113,73 @@ export class BrokerSessionService {
 
   // ------------------------------------------------------------- persist
 
+  /**
+   * Stores a fresh broker session for `userId`.
+   *
+   * TAKEOVER: if the same broker client ID is currently CONNECTED to a *different* platform user, that
+   * user's link is disconnected in the same transaction (credentials deleted, status DISCONNECTED,
+   * reason saved, their copy trading stopped) and they are notified in real time. The partial unique
+   * index on CONNECTED rows guarantees at most one CONNECTED owner even under concurrent logins.
+   */
   async saveSession(userId: string, broker: BrokerName, s: SessionMaterial, client?: ClientInfo): Promise<BrokerAccount> {
-    const linked = await this.prisma.brokerAccount.findUnique({
-      where: { broker_brokerClientId: { broker, brokerClientId: s.brokerClientId } },
-    });
-    if (linked && linked.userId !== userId) {
-      throw new ConflictException('This broker account is already linked to another user.');
+    try {
+      return await this.saveSessionOnce(userId, broker, s, client);
+    } catch (err) {
+      // Two users finishing login for the same client ID at the same instant: the partial unique index
+      // rejects one of them. Retrying once makes the later login take over cleanly.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        return this.saveSessionOnce(userId, broker, s, client);
+      }
+      throw err;
     }
+  }
 
-    return this.prisma.$transaction(async (tx) => {
-      const account = await tx.brokerAccount.upsert({
+  private async saveSessionOnce(userId: string, broker: BrokerName, s: SessionMaterial, client?: ClientInfo): Promise<BrokerAccount> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+    if (!user) throw new NotFoundException('User not found');
+    // Master accounts are market-data feeds only; they never place orders.
+    const mode = user.role === 'MASTER' ? 'DATA_ONLY' : 'TRADING';
+
+    const { account, takenOver } = await this.prisma.$transaction(async (tx) => {
+      // 1) Take the client ID away from any other user that currently has it connected.
+      const others = await tx.brokerAccount.findMany({
+        where: { broker, brokerClientId: s.brokerClientId, status: 'CONNECTED', userId: { not: userId } },
+      });
+      const now = new Date();
+      for (const old of others) {
+        await tx.brokerCredential.deleteMany({ where: { brokerAccountId: old.id } });
+        await tx.brokerAccount.update({
+          where: { id: old.id },
+          data: { status: 'DISCONNECTED', tokenExpiresAt: null, disconnectReason: TAKEOVER_REASON, disconnectedAt: now, lastError: null },
+        });
+        await tx.strategyFollower.updateMany({
+          where: { brokerAccountId: old.id, copyStatus: { not: 'OFF' } },
+          data: { copyStatus: 'OFF', stoppedAt: now, stoppedReason: TAKEOVER_REASON },
+        });
+        await this.audit.logTx(tx, {
+          action: 'BROKER_TAKEN_OVER',
+          actorUserId: userId,
+          targetType: 'BrokerAccount',
+          targetId: old.id,
+          metadata: { broker, brokerClientId: s.brokerClientId, previousUserId: old.userId, newUserId: userId },
+          client,
+        });
+      }
+
+      // 2) Upsert this user's row for the broker.
+      const existing = await tx.brokerAccount.upsert({
         where: { userId_broker: { userId, broker } },
-        create: { userId, broker, brokerClientId: s.brokerClientId, status: 'PENDING' },
+        create: { userId, broker, brokerClientId: s.brokerClientId, status: 'PENDING', mode },
         update: {},
       });
-      if (account.brokerClientId && account.brokerClientId !== s.brokerClientId) {
+      if (existing.status === 'CONNECTED' && existing.brokerClientId && existing.brokerClientId !== s.brokerClientId) {
         throw new ConflictException(
-          `You logged in as ${s.brokerClientId}, but this profile is linked to ${account.brokerClientId}. Disconnect it first to switch accounts.`,
+          `You logged in as ${s.brokerClientId}, but this profile is connected to ${existing.brokerClientId}. Disconnect it first to switch accounts.`,
         );
       }
-      const aad = account.id;
+
+      // 3) Encrypt and store the session (AAD = account id binds ciphertext to this row).
+      const aad = existing.id;
       const extra = s.extra && Object.values(s.extra).some(Boolean) ? JSON.stringify(s.extra) : undefined;
       const data = {
         encryptedAccessToken: this.box.encrypt(s.accessToken, aad),
@@ -118,31 +188,57 @@ export class BrokerSessionService {
         keyId: 'k1',
       };
       await tx.brokerCredential.upsert({
-        where: { brokerAccountId: account.id },
-        create: { brokerAccountId: account.id, ...data },
+        where: { brokerAccountId: existing.id },
+        create: { brokerAccountId: existing.id, ...data },
         update: data,
       });
       const updated = await tx.brokerAccount.update({
-        where: { id: account.id },
+        where: { id: existing.id },
         data: {
           brokerClientId: s.brokerClientId,
           status: 'CONNECTED',
           isPaper: false,
+          mode,
           tokenExpiresAt: s.expiresAt,
-          lastConnectedAt: new Date(),
+          lastConnectedAt: now,
           lastError: null,
+          disconnectReason: null,
+          disconnectedAt: null,
         },
       });
       await this.audit.logTx(tx, {
         action: 'BROKER_CONNECTED',
         actorUserId: userId,
         targetType: 'BrokerAccount',
-        targetId: account.id,
-        metadata: { broker, brokerClientId: s.brokerClientId, expiresAt: s.expiresAt.toISOString() },
+        targetId: existing.id,
+        metadata: { broker, brokerClientId: s.brokerClientId, mode, expiresAt: s.expiresAt.toISOString(), tookOverFrom: others.map((o) => o.userId) },
         client,
       });
-      return updated;
+      return { account: updated, takenOver: others };
     });
+
+    // After commit: realtime + in-memory state.
+    for (const old of takenOver) {
+      this.accountEvents.emit({ type: 'disconnected', brokerAccountId: old.id, userId: old.userId });
+      const payload: BrokerEventPayload = { brokerAccountId: old.id, broker, brokerClientId: s.brokerClientId, reason: TAKEOVER_REASON };
+      this.realtime.toUser(old.userId, WsEvent.BROKER_TAKEN_OVER, payload);
+      this.realtime.toUser(old.userId, WsEvent.BROKER_DISCONNECTED, payload);
+      void this.notifier.notify({
+        userId: old.userId,
+        type: 'BROKER_TAKEN_OVER',
+        severity: 'WARNING',
+        title: `${broker === 'ZERODHA' ? 'Zerodha' : 'Angel One'} ${s.brokerClientId} disconnected`,
+        body: TAKEOVER_REASON,
+        data: { brokerAccountId: old.id },
+      });
+    }
+    this.accountEvents.emit({ type: 'connected', brokerAccountId: account.id, userId });
+    this.realtime.toUser(userId, WsEvent.BROKER_CONNECTED, {
+      brokerAccountId: account.id,
+      broker,
+      brokerClientId: account.brokerClientId,
+    } satisfies BrokerEventPayload);
+    return account;
   }
 
   /** Records a failed login on the account (if one exists) without touching credentials. */
@@ -155,16 +251,35 @@ export class BrokerSessionService {
     return message;
   }
 
-  async decryptAccess(account: BrokerAccount): Promise<string | null> {
+  async decryptAccess(account: Pick<BrokerAccount, 'id'>): Promise<string | null> {
     const cred = await this.prisma.brokerCredential.findUnique({ where: { brokerAccountId: account.id } });
     return cred ? this.box.decrypt(cred.encryptedAccessToken, account.id) : null;
   }
 
+  /** Decrypted broker-specific extras (e.g. Angel feedToken, Kite publicToken). */
+  async decryptExtra(account: Pick<BrokerAccount, 'id'>): Promise<Record<string, string | undefined>> {
+    const cred = await this.prisma.brokerCredential.findUnique({ where: { brokerAccountId: account.id } });
+    if (!cred?.encryptedExtra) return {};
+    try {
+      return JSON.parse(this.box.decrypt(cred.encryptedExtra, account.id)) as Record<string, string | undefined>;
+    } catch {
+      return {};
+    }
+  }
+
+  /** User-initiated disconnect (only the owner can do it). */
   async disconnect(userId: string, accountId: string, client?: ClientInfo): Promise<BrokerAccount> {
     const account = await this.prisma.brokerAccount.findFirst({ where: { id: accountId, userId } });
     if (!account) throw new NotFoundException('Broker account not found');
+    return this.disconnectAccount(account, { by: 'user', reason: 'Disconnected by you', actorUserId: userId }, client);
+  }
 
-    // Best-effort logout at the broker so the token is useless even if it leaked.
+  /**
+   * Full disconnect: invalidate the token at the broker (Zerodha: DELETE /session/token, i.e.
+   * invalidateAccessToken; Angel: logout), delete encrypted credentials, mark DISCONNECTED with a reason,
+   * stop the live feed / evict from the order cache (via AccountEvents) and notify the owner.
+   */
+  async disconnectAccount(account: BrokerAccount, opts: DisconnectOptions, client?: ClientInfo): Promise<BrokerAccount> {
     try {
       const token = await this.decryptAccess(account);
       if (token && account.broker === 'ZERODHA') await this.zerodha().logout(token);
@@ -173,21 +288,84 @@ export class BrokerSessionService {
       this.logger.warn(`Broker logout failed for account ${account.id}: ${(err as Error).message}`);
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const reason = opts.reason ?? (opts.by === 'admin' ? 'Disconnected by admin' : 'Disconnected');
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
       await tx.brokerCredential.deleteMany({ where: { brokerAccountId: account.id } });
-      const updated = await tx.brokerAccount.update({
+      const row = await tx.brokerAccount.update({
         where: { id: account.id },
-        data: { status: 'DISCONNECTED', tokenExpiresAt: null },
+        data: { status: 'DISCONNECTED', tokenExpiresAt: null, disconnectReason: reason.slice(0, 300), disconnectedAt: now },
       });
+      let stopped = 0;
+      if (opts.stopCopy) {
+        const r = await tx.strategyFollower.updateMany({
+          where: { brokerAccountId: account.id, copyStatus: { not: 'OFF' } },
+          data: { copyStatus: 'OFF', stoppedAt: now, stoppedReason: reason.slice(0, 300), stoppedByUserId: opts.actorUserId ?? null },
+        });
+        stopped = r.count;
+      }
       await this.audit.logTx(tx, {
-        action: 'BROKER_DISCONNECTED',
-        actorUserId: userId,
+        action: opts.by === 'admin' ? 'ADMIN_DISCONNECTED_BROKER' : 'BROKER_DISCONNECTED',
+        actorUserId: opts.actorUserId ?? null,
         targetType: 'BrokerAccount',
         targetId: account.id,
-        metadata: { broker: account.broker, by: 'user' },
+        metadata: { broker: account.broker, by: opts.by, reason, userId: account.userId, stoppedFollows: stopped },
         client,
       });
-      return updated;
+      return row;
+    });
+
+    this.accountEvents.emit({ type: 'disconnected', brokerAccountId: account.id, userId: account.userId });
+    this.realtime.toUser(account.userId, WsEvent.BROKER_DISCONNECTED, {
+      brokerAccountId: account.id,
+      broker: account.broker,
+      brokerClientId: account.brokerClientId,
+      reason,
+    } satisfies BrokerEventPayload);
+    if (opts.by !== 'user') {
+      void this.notifier.notify({
+        userId: account.userId,
+        type: 'BROKER_DISCONNECTED',
+        severity: 'WARNING',
+        title: `${account.broker === 'ZERODHA' ? 'Zerodha' : 'Angel One'} ${account.brokerClientId ?? ''} disconnected`,
+        body: reason,
+        data: { brokerAccountId: account.id },
+      });
+    }
+    return updated;
+  }
+
+  /** Marks accounts whose daily token has expired. Returns the accounts that changed. */
+  async expireDue(now = new Date()): Promise<BrokerAccount[]> {
+    const due = await this.prisma.brokerAccount.findMany({
+      where: { status: 'CONNECTED', isPaper: false, broker: { not: 'MOCK' }, tokenExpiresAt: { lte: now } },
+    });
+    for (const a of due) await this.markExpired(a, 'Daily broker token expired — please reconnect.');
+    return due;
+  }
+
+  /** Marks one account EXPIRED (token rejected by the broker or daily expiry) and notifies the owner. */
+  async markExpired(account: BrokerAccount, reason: string): Promise<void> {
+    const r = await this.prisma.brokerAccount.updateMany({
+      where: { id: account.id, status: 'CONNECTED' },
+      data: { status: 'EXPIRED', disconnectReason: reason.slice(0, 300), disconnectedAt: new Date(), lastError: reason.slice(0, 500) },
+    });
+    if (!r.count) return; // already handled elsewhere
+    await this.audit.log({ action: 'BROKER_TOKEN_EXPIRED', targetType: 'BrokerAccount', targetId: account.id, metadata: { broker: account.broker, reason } });
+    this.accountEvents.emit({ type: 'expired', brokerAccountId: account.id, userId: account.userId });
+    this.realtime.toUser(account.userId, WsEvent.BROKER_TOKEN_EXPIRED, {
+      brokerAccountId: account.id,
+      broker: account.broker,
+      brokerClientId: account.brokerClientId,
+      reason,
+    } satisfies BrokerEventPayload);
+    void this.notifier.notify({
+      userId: account.userId,
+      type: 'BROKER_TOKEN_EXPIRED',
+      severity: 'WARNING',
+      title: `${account.broker === 'ZERODHA' ? 'Zerodha' : 'Angel One'} session expired`,
+      body: 'Reconnect your broker to resume copy trading.',
+      data: { brokerAccountId: account.id },
     });
   }
 }

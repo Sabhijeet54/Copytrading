@@ -20,9 +20,10 @@ export class UsersService {
   ) {}
 
   async updateProfile(userId: string, dto: UpdateProfileDto, req: Request): Promise<AuthUser> {
-    const data: { name?: string; mobile?: string | null } = {};
+    const data: { name?: string; mobile?: string | null; telegramChatId?: string | null } = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.mobile !== undefined) data.mobile = dto.mobile === '' ? null : dto.mobile;
+    if (dto.telegramChatId !== undefined) data.telegramChatId = dto.telegramChatId === '' ? null : dto.telegramChatId;
     if (Object.keys(data).length === 0) throw new BadRequestException('Nothing to update');
 
     const user = await this.prisma.$transaction(async (tx) => {

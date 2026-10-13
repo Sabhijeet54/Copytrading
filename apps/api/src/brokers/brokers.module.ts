@@ -12,6 +12,7 @@ import { PRISMA } from '../common/prisma/prisma.service';
 import { API_CONFIG, ApiConfig } from '../config/config.module';
 import { BrokerApiError } from './broker-http';
 import { BrokerSessionService } from './broker-session.service';
+import { TokenExpiryService } from './token-expiry.service';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 
@@ -183,5 +184,5 @@ export class BrokersController {
   }
 }
 
-@Module({ controllers: [BrokersController], providers: [BrokerSessionService], exports: [BrokerSessionService] })
+@Module({ controllers: [BrokersController], providers: [BrokerSessionService, TokenExpiryService], exports: [BrokerSessionService] })
 export class BrokersModule {}

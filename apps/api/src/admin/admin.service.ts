@@ -37,6 +37,8 @@ import { PRISMA } from '../common/prisma/prisma.service';
 import { REDIS } from '../common/redis/redis.module';
 import { API_CONFIG, ApiConfig } from '../config/config.module';
 import { HealthService } from '../health/health.service';
+import { BrokerSessionService } from '../brokers/broker-session.service';
+import { AccountEvents } from '../realtime/account-events';
 import {
   AdminAuditLogsQueryDto,
   AdminBrokerAccountsQueryDto,
@@ -83,6 +85,8 @@ export class AdminService {
     private readonly audit: AuditService,
     private readonly tokens: TokenService,
     private readonly health: HealthService,
+    private readonly sessions: BrokerSessionService,
+    private readonly accountEvents: AccountEvents,
   ) {}
 
   // ------------------------------------------------------------------ dashboard
@@ -260,45 +264,19 @@ export class AdminService {
   }
 
   /**
-   * Revokes the platform's access to a broker account: deletes the encrypted credentials,
-   * marks the account DISCONNECTED and stops any copy subscriptions that trade through it.
-   * (Invalidating the session on the broker's side is done by the broker adapter once
-   * real adapters exist — see Phase 4/5.)
+   * Force Disconnect: invalidates the token at the broker, deletes the encrypted credentials, marks the
+   * account DISCONNECTED (reason shown on the user's card), stops copy subscriptions through it, evicts it
+   * from the order cache / live feed and notifies the user in real time.
    */
   async disconnectBrokerAccount(admin: RequestUser, id: string, reason: string, client: ClientInfo): Promise<BrokerAccountView> {
     const account = await this.prisma.brokerAccount.findUnique({ where: { id } });
     if (!account) throw new NotFoundException('Broker account not found');
     if (account.status === 'DISCONNECTED') throw new BadRequestException('Broker account is already disconnected');
-    const now = new Date();
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.brokerCredential.deleteMany({ where: { brokerAccountId: id } });
-      const result = await tx.brokerAccount.update({
-        where: { id },
-        data: { status: 'DISCONNECTED', tokenExpiresAt: null, lastError: `Disconnected by admin: ${reason}` },
-      });
-      const stopped = await tx.strategyFollower.updateMany({
-        where: { brokerAccountId: id, copyStatus: { not: 'OFF' } },
-        data: { copyStatus: 'OFF', stoppedAt: now, stoppedReason: 'Broker account disconnected by admin', stoppedByUserId: admin.id },
-      });
-      await this.audit.logTx(tx, {
-        action: 'ADMIN_DISCONNECTED_BROKER',
-        actorUserId: admin.id,
-        targetType: 'BrokerAccount',
-        targetId: id,
-        metadata: { reason, broker: account.broker, userId: account.userId, stoppedFollows: stopped.count },
-        client,
-      });
-      await this.audit.logTx(tx, {
-        action: 'BROKER_DISCONNECTED',
-        actorUserId: admin.id,
-        targetType: 'BrokerAccount',
-        targetId: id,
-        metadata: { broker: account.broker, userId: account.userId, initiatedBy: 'admin' },
-        client,
-      });
-      return result;
-    });
+    const updated = await this.sessions.disconnectAccount(
+      account,
+      { by: 'admin', actorUserId: admin.id, reason: `Disconnected by admin: ${reason}`, stopCopy: true },
+      client,
+    );
     return toBrokerAccountView(updated);
   }
 
@@ -363,6 +341,7 @@ export class AdminService {
       });
       return s;
     });
+    this.accountEvents.emit({ type: 'settings', brokerAccountId: '', userId: '' });
     return toStrategyView(updated);
   }
 
@@ -394,6 +373,7 @@ export class AdminService {
       });
       return f;
     });
+    this.accountEvents.emit({ type: 'settings', brokerAccountId: '', userId: '' });
     return toStrategyFollowerView(updated);
   }
 

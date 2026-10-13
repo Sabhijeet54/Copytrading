@@ -1,6 +1,8 @@
 import type { OrderStatus, OrderType, ProductType } from '@ctp/database';
 import { BrokerApiError, brokerFetch } from '../brokers/broker-http';
 import {
+  AdapterOptions,
+  assertCanTrade,
   BrokerAdapter,
   BrokerFunds,
   BrokerHolding,
@@ -12,7 +14,8 @@ import {
   toExchange,
 } from './broker-adapter';
 
-const API_ROOT = 'https://api.kite.trade';
+export const KITE_API_ROOT = 'https://api.kite.trade';
+const API_ROOT = KITE_API_ROOT;
 
 const PRODUCT_OUT: Record<ProductType, string> = { DELIVERY: 'CNC', INTRADAY: 'MIS', CARRY_FORWARD: 'NRML' };
 const PRODUCT_IN: Record<string, ProductType> = { CNC: 'DELIVERY', MIS: 'INTRADAY', NRML: 'CARRY_FORWARD', MTF: 'DELIVERY' };
@@ -37,10 +40,12 @@ interface Env<T> {
 
 /** Kite Connect v3 REST adapter. */
 export class ZerodhaAdapter implements BrokerAdapter {
+  readonly broker = 'ZERODHA';
   constructor(
     private readonly apiKey: string,
     private readonly accessToken: string,
     private readonly proxyUrl?: string,
+    private readonly opts?: AdapterOptions,
   ) {}
 
   private async call<T>(path: string, method: 'GET' | 'POST' = 'GET', form?: Record<string, string>): Promise<T> {
@@ -61,6 +66,7 @@ export class ZerodhaAdapter implements BrokerAdapter {
   }
 
   async placeOrder(o: PlaceOrderInput): Promise<{ brokerOrderId: string }> {
+    assertCanTrade(this.opts);
     const form: Record<string, string> = {
       tradingsymbol: canonicalSymbol(o.symbol),
       exchange: o.exchange,

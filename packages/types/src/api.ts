@@ -1,6 +1,7 @@
 import type {
   AllocationMode,
   AuditAction,
+  BrokerAccountMode,
   BrokerAccountStatus,
   BrokerName,
   CopyStatus,
@@ -42,6 +43,8 @@ export interface AuthUser {
   email: string;
   name: string;
   mobile: string | null;
+  /** Telegram chat id for personal alerts (optional). */
+  telegramChatId?: string | null;
   role: Role;
   status: UserStatus;
   emailVerified: boolean;
@@ -76,10 +79,14 @@ export interface BrokerAccountView {
   brokerClientId: string | null;
   status: BrokerAccountStatus;
   isPaper: boolean;
+  /** TRADING (client) or DATA_ONLY (master live-feed account — never places orders). */
+  mode: BrokerAccountMode;
   tokenExpiresAt: IsoDate | null;
   tokenStatus: 'ACTIVE' | 'EXPIRED' | 'NONE';
   lastConnectedAt: IsoDate | null;
   lastError: string | null;
+  disconnectReason: string | null;
+  disconnectedAt: IsoDate | null;
   createdAt: IsoDate;
   updatedAt: IsoDate;
 }
@@ -115,6 +122,10 @@ export interface StrategyFollowerView {
   allocationAmount: DecimalString | null;
   allocationPercent: DecimalString | null;
   fixedQuantity: number | null;
+  fixedLots: number | null;
+  maxLots: number | null;
+  maxTradesPerDay: number | null;
+  allowedSegments: string[];
   riskLevel: RiskLevel | null;
   maxTradeValue: DecimalString | null;
   maxDailyLoss: DecimalString | null;

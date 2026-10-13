@@ -1,6 +1,8 @@
 import type { Exchange, OrderStatus, OrderType, ProductType } from '@ctp/database';
 import { BrokerApiError, brokerFetch } from '../brokers/broker-http';
 import {
+  AdapterOptions,
+  assertCanTrade,
   BrokerAdapter,
   BrokerFunds,
   BrokerHolding,
@@ -12,7 +14,8 @@ import {
   toExchange,
 } from './broker-adapter';
 
-const API_ROOT = 'https://apiconnect.angelone.in';
+export const ANGEL_API_ROOT = 'https://apiconnect.angelone.in';
+const API_ROOT = ANGEL_API_ROOT;
 
 const PRODUCT_OUT: Record<ProductType, string> = { DELIVERY: 'DELIVERY', INTRADAY: 'INTRADAY', CARRY_FORWARD: 'CARRYFORWARD' };
 const PRODUCT_IN: Record<string, ProductType> = { DELIVERY: 'DELIVERY', INTRADAY: 'INTRADAY', CARRYFORWARD: 'CARRY_FORWARD', MARGIN: 'CARRY_FORWARD' };
@@ -44,12 +47,21 @@ export interface AngelHeaders {
 
 /** SmartAPI REST adapter. Symbol tokens are resolved with searchScrip and cached in memory. */
 export class AngelOneAdapter implements BrokerAdapter {
+  readonly broker = 'ANGEL_ONE';
   private static tokenCache = new Map<string, { symbol: string; token: string }>();
+  /** In-flight lookups, so N clients copying the same new symbol trigger one searchScrip call. */
+  private static inflight = new Map<string, Promise<{ symbol: string; token: string }>>();
 
   constructor(
     private readonly cfg: AngelHeaders,
     private readonly jwt: string,
+    private readonly opts?: AdapterOptions,
   ) {}
+
+  /** Cached symbol token (no network), or undefined. */
+  static cached(exchange: Exchange, symbol: string): { symbol: string; token: string } | undefined {
+    return AngelOneAdapter.tokenCache.get(`${exchange}:${symbol.toUpperCase()}`);
+  }
 
   private async call<T>(path: string, method: 'GET' | 'POST', payload?: object): Promise<T | null> {
     const { status: http, body } = await brokerFetch<{ status: boolean; message?: string; errorcode?: string; data?: T | null }>(
@@ -79,10 +91,20 @@ export class AngelOneAdapter implements BrokerAdapter {
 
   /** Maps a canonical symbol to Angel's tradingsymbol + symboltoken. */
   async resolve(exchange: Exchange, symbol: string): Promise<{ symbol: string; token: string }> {
-    const sym = symbol.toUpperCase();
-    const key = `${exchange}:${sym}`;
+    const key = `${exchange}:${symbol.toUpperCase()}`;
     const hit = AngelOneAdapter.tokenCache.get(key);
     if (hit) return hit;
+    let p = AngelOneAdapter.inflight.get(key);
+    if (!p) {
+      p = this.lookup(exchange, symbol).finally(() => AngelOneAdapter.inflight.delete(key));
+      AngelOneAdapter.inflight.set(key, p);
+    }
+    return p;
+  }
+
+  private async lookup(exchange: Exchange, symbol: string): Promise<{ symbol: string; token: string }> {
+    const sym = symbol.toUpperCase();
+    const key = `${exchange}:${sym}`;
     const base = canonicalSymbol(sym);
     const rows = (await this.call<{ tradingsymbol: string; symboltoken: string }[]>('/rest/secure/angelbroking/order/v1/searchScrip', 'POST', {
       exchange,
@@ -99,6 +121,7 @@ export class AngelOneAdapter implements BrokerAdapter {
   }
 
   async placeOrder(o: PlaceOrderInput): Promise<{ brokerOrderId: string }> {
+    assertCanTrade(this.opts);
     const inst = await this.resolve(o.exchange, o.symbol);
     const d = await this.call<{ orderid: string }>('/rest/secure/angelbroking/order/v1/placeOrder', 'POST', {
       variety: o.orderType === 'SL' || o.orderType === 'SL_M' ? 'STOPLOSS' : 'NORMAL',
