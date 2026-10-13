@@ -87,7 +87,7 @@ export function AngelOneLoginDialog({ open, onOpenChange, defaultClientCode }: {
 }
 
 /** Connect / re-login buttons for each configured broker. */
-export function BrokerConnectButtons({ angelClientCode }: { angelClientCode?: string }) {
+export function BrokerConnectButtons({ angelClientCode, isMaster = false }: { angelClientCode?: string; isMaster?: boolean }) {
   const available = useBrokerAvailability();
   const start = useStartBrokerLogin();
   const [angelOpen, setAngelOpen] = useState(false);
@@ -119,6 +119,22 @@ export function BrokerConnectButtons({ angelClientCode }: { angelClientCode?: st
         >
           Log in with Angel One
         </Button>
+      ) : null}
+      {zerodha ? (
+        <p className="w-full rounded-md border border-warning/40 bg-warning/10 p-2 text-xs">
+          {isMaster ? (
+            <>
+              <strong>Master: live market data needs a paid Kite Connect plan.</strong> With the free Kite Connect
+              &quot;Personal&quot; plan, Zerodha will connect but live prices will NOT come. Use a paid Kite Connect app, or
+              connect Angel One and choose &quot;Use Angel One&quot; for the live feed (free).
+            </>
+          ) : (
+            <>
+              <strong>Note:</strong> Zerodha connects through the platform&apos;s Kite Connect app. Orders work on every plan; live
+              market data comes from the master feed, not from your account.
+            </>
+          )}
+        </p>
       ) : null}
       <AngelOneLoginDialog key={angelClientCode} open={angelOpen} onOpenChange={setAngelOpen} defaultClientCode={angelClientCode} />
     </div>

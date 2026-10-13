@@ -77,7 +77,7 @@ export default function DashboardPage() {
             )}
             <div className="mt-4">
               <p className="mb-2 text-xs text-muted-foreground">Broker sessions expire daily — log in again each trading day.</p>
-              <BrokerConnectButtons angelClientCode={angel?.brokerClientId ?? undefined} />
+              <BrokerConnectButtons angelClientCode={angel?.brokerClientId ?? undefined} isMaster={user.role === 'MASTER'} />
             </div>
           </CardContent>
         </Card>

@@ -182,6 +182,13 @@ export class MarketFeedService implements OnApplicationBootstrap, OnModuleDestro
 
       if (account.broker === 'ZERODHA') {
         if (!this.config.ZERODHA_API_KEY) return this.setState('STOPPED', 'ZERODHA_API_KEY not configured');
+        // The browser-style WebSocket hides the HTTP status of a refused handshake ("socket error"), so check
+        // market-data access over REST first and give a clear reason instead of reconnecting forever.
+        const problem = await this.probeKite(token);
+        if (problem) {
+          this.account = undefined;
+          return this.setState('STOPPED', problem);
+        }
         const t = new KiteTicker(this.config.ZERODHA_API_KEY, token);
         this.kite = t;
         this.wire(t);
@@ -216,6 +223,27 @@ export class MarketFeedService implements OnApplicationBootstrap, OnModuleDestro
       this.scheduleRestart();
     } finally {
       this.starting = false;
+    }
+  }
+
+  /** Returns a human-readable reason when Kite market data cannot work with this token, else null. */
+  private async probeKite(token: string): Promise<string | null> {
+    try {
+      const res = await fetch('https://api.kite.trade/quote/ltp?i=NSE:SBIN', {
+        headers: { 'X-Kite-Version': '3', Authorization: `token ${this.config.ZERODHA_API_KEY}:${token}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (res.ok) return null;
+      const body = (await res.json().catch(() => null)) as { message?: string; error_type?: string } | null;
+      if (body?.error_type === 'TokenException' || res.status === 403 && /token/i.test(body?.message ?? '')) {
+        return 'Zerodha token invalid/expired — master ko Zerodha reconnect karna hoga.';
+      }
+      if (body?.error_type === 'PermissionException' || res.status === 403) {
+        return 'Is Kite Connect app me live market data (WebSocket/quotes) ki permission nahi hai — Kite "Personal" (free) plan me data nahi milta. Kite Connect paid plan lo, ya feed ke liye "Use Angel One" chuno (Angel ka data free hai).';
+      }
+      return `Kite market data check failed (HTTP ${res.status}${body?.message ? `: ${body.message}` : ''})`;
+    } catch {
+      return null; // network blip — let the socket try
     }
   }
 

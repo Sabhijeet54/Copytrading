@@ -24,7 +24,9 @@ function readCookie(header: string | undefined, name: string): string | undefine
  * Authenticated with the same httpOnly access cookie as REST. Each socket joins `user:<id>` and `role:<ROLE>`,
  * so events are only ever delivered to the user they belong to (or to admins).
  */
-@WebSocketGateway({ path: '/socket.io', serveClient: false, cors: { origin: true, credentials: true } })
+// addTrailingSlash:false — Next.js strips the trailing slash when proxying /api/socket.io/ → /socket.io, which made
+// engine.io (expecting /socket.io/) answer 404. Without the slash requirement both forms match.
+@WebSocketGateway({ path: '/socket.io', addTrailingSlash: false, serveClient: false, cors: { origin: true, credentials: true } })
 export class RealtimeGateway implements OnGatewayConnection {
   @WebSocketServer() server!: Server;
 

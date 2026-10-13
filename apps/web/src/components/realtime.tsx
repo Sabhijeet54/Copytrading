@@ -38,6 +38,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     const url = process.env.NEXT_PUBLIC_SOCKET_URL || undefined;
     const s = io(url ?? '', {
       path: url ? '/socket.io' : '/api/socket.io',
+      addTrailingSlash: false,
       withCredentials: true,
       transports: ['polling', 'websocket'],
       reconnectionDelayMax: 10_000,
