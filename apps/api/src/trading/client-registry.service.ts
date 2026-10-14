@@ -159,6 +159,18 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
     }
     return out;
   }
+  /** Non-zero master net positions of a strategy (for strategy exit / signal-book exit). */
+  masterPositions(strategyId: string): { exchange: Exchange; symbol: string; productType: ProductType; qty: number }[] {
+    const out: { exchange: Exchange; symbol: string; productType: ProductType; qty: number }[] = [];
+    for (const [k, q] of this.masterNet) {
+      if (!q || !k.startsWith(`${strategyId}|`)) continue;
+      const [, inst, product] = k.split('|');
+      const [ex, ...sym] = inst!.split(':');
+      out.push({ exchange: ex as Exchange, symbol: sym.join(':'), productType: product as ProductType, qty: q });
+    }
+    return out;
+  }
+
   masterNetOf(strategyId: string, ex: string, sym: string, product: ProductType): number {
     return this.masterNet.get(posKey(strategyId, ex, sym, product)) ?? 0;
   }

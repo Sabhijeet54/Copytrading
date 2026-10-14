@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { brokerLabel, formatDateTime, formatINR, formatNumber, humanize } from '@/lib/format';
-import { type LiveAccount, type LivePosition, type LtpMap, type PaperPosition, useExitPosition, useLtps } from '@/lib/trading';
+import { type LiveAccount, type LivePosition, type LtpMap, type PaperPosition, useExitPosition, useExitSignalBook, useLtps } from '@/lib/trading';
 import { cn } from '@/lib/utils';
 
 export function Pnl({ value }: { value: number | string | null | undefined }) {
@@ -80,6 +80,20 @@ function useExit(clientUserId?: string) {
       },
     );
   return { exit, pending: m.isPending, pendingVars: m.variables };
+}
+
+/** Master's signal book: exiting a row squares off that instrument's signals for the master and all clients. */
+function useBookExit() {
+  const m = useExitSignalBook();
+  const exit = (_accountId: string, p: { exchange: string; symbol: string; productType?: string }) =>
+    m.mutate(
+      { exchange: p.exchange, symbol: p.symbol, productType: p.productType ?? 'INTRADAY' },
+      {
+        onSuccess: (r) => toast.success(`${p.symbol} exited for you and all clients${r.signalsClosed ? ` · ${r.signalsClosed} signal(s) closed` : ''}`),
+        onError: (err) => toast.error(err.message),
+      },
+    );
+  return { exit, pending: m.isPending, pendingVars: m.variables ? { accountId: '', ...m.variables } : undefined };
 }
 
 function Empty({ cols, text }: { cols: number; text: string }) {
@@ -253,17 +267,22 @@ export function PaperPositionsCard({
   title = 'Paper positions',
   canExit = false,
   clientUserId,
+  signalBook = false,
 }: {
   rows: PaperPosition[];
   title?: string;
   canExit?: boolean;
   clientUserId?: string;
+  /** Master's own virtual book: Exit squares off the instrument's signals for master + all clients. */
+  signalBook?: boolean;
 }) {
   const open = rows.filter((p) => p.quantity !== 0);
   const closed = rows.filter((p) => p.quantity === 0);
   const [showClosed, setShowClosed] = useState(false);
   const ltps = useLtps(open.map((p) => keyOf(p.exchange, p.symbol))).data;
-  const { exit, pending, pendingVars } = useExit(clientUserId);
+  const selfExit = useExit(clientUserId);
+  const bookExit = useBookExit();
+  const { exit, pending, pendingVars } = signalBook ? bookExit : selfExit;
   const closedPnl = closed.reduce((s, p) => s + Number(p.realizedPnl), 0);
   return (
     <Card>

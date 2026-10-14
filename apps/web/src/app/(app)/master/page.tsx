@@ -581,7 +581,7 @@ export default function MasterDeskPage() {
           <p className="text-sm text-muted-foreground">Connect Zerodha or Angel One from the Dashboard to see live data.</p>
         ) : null}
         {live.data?.live.map((a) => <LiveAccountCard key={a.accountId} a={a} />)}
-        {live.data && live.data.paperPositions.length > 0 ? <PaperPositionsCard rows={live.data.paperPositions} title="My signal book (virtual)" /> : null}
+        {live.data && live.data.paperPositions.length > 0 ? <PaperPositionsCard rows={live.data.paperPositions} title="My signal book (virtual)" canExit signalBook /> : null}
       </div>
 
       <Dialog open={!!exitTarget} onOpenChange={(o) => !o && setExitTarget(null)}>

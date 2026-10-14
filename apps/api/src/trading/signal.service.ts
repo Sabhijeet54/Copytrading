@@ -1,7 +1,7 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 import type Redis from 'ioredis';
 import { Prisma } from '@ctp/database';
-import type { MasterTrade, PrismaClient } from '@ctp/database';
+import type { Exchange, MasterTrade, PrismaClient, ProductType } from '@ctp/database';
 import { generateToken } from '@ctp/shared';
 import { WsEvent } from '@ctp/types';
 import { AuditService } from '../audit/audit.service';
@@ -218,9 +218,96 @@ export class SignalService implements OnApplicationBootstrap, OnModuleDestroy {
     }
   }
 
-  /** Squares off every open signal of a strategy (strategy exit). Returns how many were closed. */
+  /**
+   * Strategy exit: squares off every open signal, then exits whatever master position of the strategy is still
+   * left (e.g. trades placed before signal tracking existed) — for the master's signal book AND all followers.
+   */
   async squareOffStrategy(strategyId: string, actorUserId: string): Promise<{ closed: number; failed: number; errors: string[] }> {
-    return this.squareOffWhere({ strategyId, signalStatus: 'OPEN' }, 'STRATEGY_EXIT', actorUserId);
+    const out = await this.squareOffWhere({ strategyId, signalStatus: 'OPEN' }, 'STRATEGY_EXIT', actorUserId);
+    const strategy = await this.prisma.strategy.findUnique({ where: { id: strategyId } });
+    if (!strategy) return out;
+    for (const p of this.registry.masterPositions(strategyId)) {
+      try {
+        if (await this.exitMasterNet(strategy.id, strategy.masterUserId, p, 'STRATEGY_EXIT')) out.closed++;
+      } catch (err) {
+        out.failed++;
+        out.errors.push(`${p.symbol}: ${(err as Error).message}`);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * "Exit" on one row of the master's signal book: squares off every open signal of that instrument (each one
+   * separately, for master + followers), exits any untracked remainder through the copy engine, and finally
+   * closes whatever is still left in the master's virtual book at LTP. Other instruments are not touched.
+   */
+  async exitBookPosition(masterUserId: string, pos: { exchange: Exchange; symbol: string; productType: ProductType }) {
+    const open = await this.prisma.masterTrade.findMany({
+      where: { masterUserId, exchange: pos.exchange, symbol: pos.symbol, productType: pos.productType, signalStatus: 'OPEN' },
+      orderBy: { createdAt: 'asc' },
+    });
+    let signals = 0;
+    for (const s of open) {
+      await this.squareOff(masterUserId, s.id, 'SQUARE_OFF', masterUserId);
+      signals++;
+    }
+    const strategies = await this.prisma.strategy.findMany({ where: { masterUserId }, select: { id: true } });
+    for (const st of strategies) {
+      const net = this.registry.masterNetOf(st.id, pos.exchange, pos.symbol, pos.productType);
+      if (net) await this.exitMasterNet(st.id, masterUserId, { ...pos, qty: net }, 'SQUARE_OFF');
+    }
+    // Anything still in the virtual book (e.g. from before a restart) is closed on the book only.
+    const left = await this.prisma.position.findFirst({
+      where: { userId: masterUserId, isPaper: true, exchange: pos.exchange, symbol: pos.symbol, productType: pos.productType, quantity: { not: 0 } },
+    });
+    if (left) {
+      const price = this.prices.get(instrumentKey(pos.exchange, pos.symbol)) ?? Number(left.lastPrice ?? left.averagePrice);
+      await this.engine.applyPaperFill(masterUserId, left.brokerAccountId, { ...left, side: left.quantity > 0 ? 'SELL' : 'BUY' }, Math.abs(left.quantity), price);
+    }
+    this.refreshWatch();
+    this.realtime.toUser(masterUserId, WsEvent.MASTER_TRADE_DETECTED, { symbol: pos.symbol, closed: true });
+    return { signalsClosed: signals, symbol: pos.symbol };
+  }
+
+  /** Exits a master net position of one strategy through the copy engine (followers exit too) and books it in the master's virtual book. */
+  private async exitMasterNet(
+    strategyId: string,
+    masterUserId: string,
+    p: { exchange: Exchange; symbol: string; productType: ProductType; qty: number },
+    reason: SignalExitReason,
+  ): Promise<boolean> {
+    if (!p.qty) return false;
+    const account =
+      (await this.prisma.brokerAccount.findFirst({ where: { userId: masterUserId, mode: 'DATA_ONLY' }, orderBy: { createdAt: 'asc' } })) ??
+      (await this.prisma.brokerAccount.findFirst({ where: { userId: masterUserId }, orderBy: { createdAt: 'asc' } }));
+    if (!account) return false;
+    const price = this.prices.get(instrumentKey(p.exchange, p.symbol));
+    const exitSide = p.qty > 0 ? 'SELL' : 'BUY';
+    const qty = Math.abs(p.qty);
+    if (price != null) {
+      await this.engine.applyPaperFill(masterUserId, account.id, { exchange: p.exchange, symbol: p.symbol, productType: p.productType, side: exitSide }, qty, price).catch(() => undefined);
+    }
+    await this.engine.onMasterTrade(
+      { id: strategyId, masterUserId },
+      { id: account.id, broker: account.broker },
+      {
+        brokerOrderId: `SQX-${strategyId.slice(-6)}-${generateToken(6)}`,
+        exchange: p.exchange,
+        symbol: p.symbol,
+        side: exitSide,
+        quantity: qty,
+        filledQuantity: qty,
+        orderType: 'MARKET',
+        productType: p.productType,
+        price,
+        averagePrice: price,
+        status: 'FILLED',
+        timestamp: new Date(),
+        exitReason: reason,
+      },
+    );
+    return true;
   }
 
   /** Auto square-off / kill switch: closes matching open signals (with the copy engine halted this only books them). */

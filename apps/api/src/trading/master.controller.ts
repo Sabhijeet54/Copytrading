@@ -17,7 +17,7 @@ import { RiskService } from './risk.service';
 import { AccountEvents } from '../realtime/account-events';
 import { MarketFeedService } from '../market-data/market-feed.service';
 import { instrumentKey, PriceCacheService } from '../market-data/price-cache.service';
-import { AssignClientDto, ExitPositionDto, MasterOrderDto, SignalTpSlDto, StrategyDto, StrategyStatusDto } from './trading.dto';
+import { AssignClientDto, ExitPositionDto, MasterOrderDto, SignalBookExitDto, SignalTpSlDto, StrategyDto, StrategyStatusDto } from './trading.dto';
 import { SignalService } from './signal.service';
 import { startOfTradingDayIST } from '../admin/admin.service';
 import { ClientAssignService } from './client-assign.service';
@@ -331,6 +331,14 @@ export class MasterController {
   @Post('signals/:id/square-off')
   squareOffSignal(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.signals.squareOff(user.id, id, 'SQUARE_OFF', user.id);
+  }
+
+  /** Exit ONE row of my signal book (virtual position): its open signals for me + all clients, then the book. */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('signal-book/exit')
+  exitSignalBook(@CurrentUser() user: RequestUser, @Body() dto: SignalBookExitDto) {
+    return this.signals.exitBookPosition(user.id, dto);
   }
 
   /** Set / change / clear the target and stop loss of ONE signal (null clears). */

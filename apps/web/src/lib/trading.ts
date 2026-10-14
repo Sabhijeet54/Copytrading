@@ -164,6 +164,16 @@ export function useExitPosition(clientUserId?: string) {
   });
 }
 
+/** Master: exit one row of the signal book (its open signals for master + all clients, then the virtual position). */
+export function useExitSignalBook() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { exchange: string; symbol: string; productType: string }) =>
+      api<{ signalsClosed: number; symbol: string }>('/master/signal-book/exit', { method: 'POST', body }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['master'] }),
+  });
+}
+
 export interface AssignClientInput {
   email: string;
   allocationMode: 'FIXED_QUANTITY' | 'CAPITAL_PERCENTAGE' | 'PROPORTIONAL';

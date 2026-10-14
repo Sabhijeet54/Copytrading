@@ -54,6 +54,14 @@ export class MasterOrderDto {
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) stopLossPrice?: number;
 }
 
+export class SignalBookExitDto {
+  @IsIn(EXCHANGES) exchange!: (typeof EXCHANGES)[number];
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
+  @Matches(/^[A-Z0-9&_\-]{1,40}$/, { message: 'Invalid symbol' })
+  symbol!: string;
+  @IsIn(['DELIVERY', 'INTRADAY', 'CARRY_FORWARD']) productType!: 'DELIVERY' | 'INTRADAY' | 'CARRY_FORWARD';
+}
+
 export class SignalTpSlDto {
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) targetPrice?: number | null;
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) stopLossPrice?: number | null;
