@@ -1,6 +1,10 @@
 'use client';
 
-import { Search } from 'lucide-react';
+import { KeyRound, Pencil, Plus, Search } from 'lucide-react';
+import { useState } from 'react';
+import type { AdminUserListItem } from '@ctp/types';
+import { AddUserDialog, EditUserDialog, LicenceDialog } from '@/components/admin-user-dialogs';
+import { Button } from '@/components/ui/button';
 import Link from 'next/link';
 import { EnumSelect } from '@/components/enum-select';
 import { Field, FilterBar } from '@/components/filter-bar';
@@ -16,15 +20,28 @@ import { brokerLabel, formatDateTime } from '@/lib/format';
 import { useAdminUsers } from '@/lib/queries';
 import { useListState } from '@/lib/use-list-state';
 
-const COLS = 7;
+const COLS = 9;
+const LICENCE_LABEL = { NONE: 'No licence', ACTIVE: 'Active', EXPIRING: 'Expiring ≤ 7d', EXPIRED: 'Expired' } as const;
+const LICENCE_TONE = { NONE: 'text-muted-foreground', ACTIVE: 'text-success', EXPIRING: 'text-warning', EXPIRED: 'text-destructive' } as const;
 
 export default function AdminUsersPage() {
-  const list = useListState({ search: '', role: '', status: '', broker: '' });
+  const list = useListState({ search: '', role: '', status: '', broker: '', licence: '' });
   const q = useAdminUsers(list.params);
+  const [addOpen, setAddOpen] = useState(false);
+  const [editUser, setEditUser] = useState<AdminUserListItem | null>(null);
+  const [licUser, setLicUser] = useState<AdminUserListItem | null>(null);
 
   return (
     <>
-      <PageHeader title="Users" description="Every account on the platform. Credentials and broker tokens are never shown." />
+      <PageHeader
+        title="Users"
+        description={`Every account on the platform${q.data ? ` · ${q.data.total} total` : ''}. Credentials and broker tokens are never shown.`}
+        actions={
+          <Button onClick={() => setAddOpen(true)}>
+            <Plus /> Add user
+          </Button>
+        }
+      />
       <Card className="overflow-hidden">
         <FilterBar onReset={list.reset} active={list.active}>
           <Field label="Search" className="grid w-64 gap-1.5">
@@ -44,6 +61,14 @@ export default function AdminUsersPage() {
           <Field label="Status">
             <EnumSelect value={list.filters.status} onChange={(v) => list.setFilter('status', v)} options={Object.values(UserStatus)} />
           </Field>
+          <Field label="Licence">
+            <EnumSelect
+              value={list.filters.licence}
+              onChange={(v) => list.setFilter('licence', v)}
+              options={['ACTIVE', 'EXPIRING', 'EXPIRED', 'NONE']}
+              labels={(v) => LICENCE_LABEL[v as keyof typeof LICENCE_LABEL]}
+            />
+          </Field>
           <Field label="Broker">
             <EnumSelect
               value={list.filters.broker}
@@ -60,9 +85,11 @@ export default function AdminUsersPage() {
               <TableHead>Role</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Broker accounts</TableHead>
-              <TableHead>Email</TableHead>
+              <TableHead>Mobile</TableHead>
+              <TableHead>Licence</TableHead>
               <TableHead>Last login</TableHead>
               <TableHead>Joined</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -96,9 +123,30 @@ export default function AdminUsersPage() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell>{u.emailVerified ? 'Verified' : <span className="text-muted-foreground">Unverified</span>}</TableCell>
+                  <TableCell className="whitespace-nowrap">{u.mobile ?? <span className="text-muted-foreground">—</span>}</TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    <div className={`font-medium ${LICENCE_TONE[u.licenceStatus]}`}>
+                      {LICENCE_LABEL[u.licenceStatus]}
+                      {u.licenceDays ? ` · ${u.licenceDays}d` : ''}
+                    </div>
+                    {u.licenceExpiresAt ? (
+                      <div className="text-muted-foreground">
+                        {formatDateTime(u.licenceAssignedAt)} → {formatDateTime(u.licenceExpiresAt)}
+                      </div>
+                    ) : null}
+                  </TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(u.lastLoginAt)}</TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(u.createdAt)}</TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button size="icon" variant="ghost" className="size-8" title="Edit user" aria-label={`Edit ${u.name}`} onClick={() => setEditUser(u)}>
+                        <Pencil />
+                      </Button>
+                      <Button size="icon" variant="ghost" className="size-8" title="Licence" aria-label={`Licence for ${u.name}`} onClick={() => setLicUser(u)}>
+                        <KeyRound />
+                      </Button>
+                    </div>
+                  </TableCell>
                 </TableRow>
               ))
             )}
@@ -106,6 +154,9 @@ export default function AdminUsersPage() {
         </Table>
         {q.data ? <Pagination page={list.page} pageSize={list.pageSize} total={q.data.total} onPage={list.setPage} /> : null}
       </Card>
+      <AddUserDialog open={addOpen} onOpenChange={setAddOpen} />
+      <EditUserDialog user={editUser} onClose={() => setEditUser(null)} />
+      <LicenceDialog user={licUser} onClose={() => setLicUser(null)} />
     </>
   );
 }

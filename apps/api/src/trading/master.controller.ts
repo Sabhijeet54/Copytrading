@@ -17,7 +17,9 @@ import { RiskService } from './risk.service';
 import { AccountEvents } from '../realtime/account-events';
 import { MarketFeedService } from '../market-data/market-feed.service';
 import { instrumentKey, PriceCacheService } from '../market-data/price-cache.service';
-import { AssignClientDto, ExitPositionDto, MasterOrderDto, StrategyDto, StrategyStatusDto } from './trading.dto';
+import { AssignClientDto, ExitPositionDto, MasterOrderDto, SignalTpSlDto, StrategyDto, StrategyStatusDto } from './trading.dto';
+import { SignalService } from './signal.service';
+import { startOfTradingDayIST } from '../admin/admin.service';
 import { ClientAssignService } from './client-assign.service';
 import { overlayLivePrices, paperPositionView } from './price-overlay';
 import { TradingService } from './trading.service';
@@ -38,6 +40,7 @@ export class MasterController {
     private readonly prices: PriceCacheService,
     private readonly feed: MarketFeedService,
     private readonly assigner: ClientAssignService,
+    private readonly signals: SignalService,
   ) {}
 
   private async own(user: RequestUser, id: string): Promise<Strategy> {
@@ -242,6 +245,9 @@ export class MasterController {
     }
     if ((dto.orderType === 'LIMIT' || dto.orderType === 'SL') && !dto.price) throw new BadRequestException('Price is required for LIMIT / SL orders.');
     if ((dto.orderType === 'SL' || dto.orderType === 'SL_M') && !dto.triggerPrice) throw new BadRequestException('Trigger price is required for SL orders.');
+    if (dto.targetPrice != null && dto.stopLossPrice != null && (dto.side === 'BUY' ? dto.targetPrice <= dto.stopLossPrice : dto.targetPrice >= dto.stopLossPrice)) {
+      throw new BadRequestException(dto.side === 'BUY' ? 'For a BUY, target must be above stop loss' : 'For a SELL, target must be below stop loss');
+    }
 
     const accounts = await this.prisma.brokerAccount.findMany({ where: { userId: user.id }, orderBy: { createdAt: 'asc' } });
     const account = dto.brokerAccountId
@@ -281,19 +287,56 @@ export class MasterController {
       status: isSignal ? 'FILLED' : 'SUBMITTED',
       timestamp: new Date(),
       lotSize: dto.lotSize,
+      targetPrice: dto.targetPrice ?? null,
+      stopLossPrice: dto.stopLossPrice ?? null,
+      exitReason: 'MASTER_EXIT',
     });
     if (!summary) throw new BadRequestException('Duplicate order ignored.');
+    if (dto.targetPrice != null || dto.stopLossPrice != null) this.signals.refreshWatch();
     return { ...(await this.trade(user, summary.tradeId)), fanOutMs: summary.totalMs };
   }
 
-  /** Exits every follower's open copy positions of this strategy (MARKET). */
+  /**
+   * Strategy exit: squares off every OPEN signal of the strategy (master + followers, moved to history), then
+   * exits any copy position still left at followers (MARKET).
+   */
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @Post('strategies/:id/exit-all')
   async exitAll(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     await this.own(user, id);
+    const sig = await this.signals.squareOffStrategy(id, user.id);
     const results = await this.risk.exitStrategy(id);
-    return { orders: results.reduce((s, r) => s + r.orders, 0), failed: results.reduce((s, r) => s + r.failed, 0), results };
+    return {
+      signalsClosed: sig.closed,
+      orders: results.reduce((s, r) => s + r.orders, 0),
+      failed: sig.failed + results.reduce((s, r) => s + r.failed, 0),
+      errors: [...sig.errors, ...results.flatMap((r) => r.errors)],
+      results,
+    };
+  }
+
+  // --------------------------------------------------------------- signals
+
+  /** Executed signals with entry / exit / TP-SL / P&L. `scope=today` (default) or `all`. */
+  @Get('signals')
+  async signalList(@CurrentUser() user: RequestUser, @Query('status') status?: string, @Query('scope') scope?: string) {
+    const st = status === 'open' || status === 'closed' ? status : 'all';
+    return this.signals.list(user.id, { status: st, from: scope === 'all' ? undefined : startOfTradingDayIST() });
+  }
+
+  /** Square off ONE signal for the master and every follower (MARKET). */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('signals/:id/square-off')
+  squareOffSignal(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.signals.squareOff(user.id, id, 'SQUARE_OFF', user.id);
+  }
+
+  /** Set / change / clear the target and stop loss of ONE signal (null clears). */
+  @Patch('signals/:id/tpsl')
+  setTpSl(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: SignalTpSlDto) {
+    return this.signals.setTpSl(user.id, id, dto.targetPrice ?? null, dto.stopLossPrice ?? null);
   }
 
   /** Average copy latency (ms) for the dashboard. */

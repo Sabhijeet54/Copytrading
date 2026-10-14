@@ -210,7 +210,7 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
     const started = Date.now();
     const rows = await this.prisma.strategyFollower.findMany({
       where: { copyStatus: 'ON', strategy: { status: 'ACTIVE' } },
-      include: { brokerAccount: true, strategy: true },
+      include: { brokerAccount: true, strategy: true, follower: { select: { licenceExpiresAt: true, status: true } } },
     });
     const now = Date.now();
     const byStrategy = new Map<string, ClientEntry[]>();
@@ -248,6 +248,16 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
           ...(skipped.get(s.id) ?? []),
           { followerId: r.id, userId: r.followerUserId, accountId: a?.id ?? null, broker: a?.broker ?? null, reason, settings },
         ]);
+      if (r.follower.status !== 'ACTIVE') {
+        skip('Client account disabled');
+        continue;
+      }
+      // Licence: none assigned = allowed unless LICENCE_REQUIRED; an expired licence always stops copying.
+      const lic = r.follower.licenceExpiresAt?.getTime() ?? null;
+      if (lic !== null ? lic <= now : this.config.LICENCE_REQUIRED) {
+        skip(lic !== null ? 'Licence expired — renew to resume copy trading' : 'No licence assigned');
+        continue;
+      }
       if (!a) {
         skip('No broker account selected');
         continue;

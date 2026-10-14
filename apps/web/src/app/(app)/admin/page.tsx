@@ -79,8 +79,27 @@ export default function AdminOverviewPage() {
         </div>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="mb-3 grid grid-cols-2 gap-3 lg:grid-cols-5">
         <StatCard label="Total users" value={formatNumber(s?.totalUsers)} loading={loading} icon={<Users />} />
+        <StatCard
+          label="This month"
+          value={formatNumber(s?.newUsersThisMonth)}
+          loading={loading}
+          icon={<UserCheck />}
+          hint={
+            s
+              ? s.newUsersLastMonth
+                ? `${Math.round(((s.newUsersThisMonth - s.newUsersLastMonth) / s.newUsersLastMonth) * 100)}% vs last month (${s.newUsersLastMonth})`
+                : `Last month: ${s.newUsersLastMonth}`
+              : undefined
+          }
+        />
+        <StatCard label="Expired users" value={formatNumber(s?.expiredUsers)} tone={s && s.expiredUsers > 0 ? 'destructive' : 'default'} loading={loading} icon={<XCircle />} hint="Licence expired" />
+        <StatCard label="Active clients" value={formatNumber(s?.activeClients)} tone="success" loading={loading} icon={<CheckCircle2 />} hint="Broker connected" />
+        <StatCard label="Expiring this week" value={formatNumber(s?.expiringThisWeek)} loading={loading} icon={<TriangleAlert />} hint="Licence ends in ≤ 7 days" />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard label="Connected accounts" value={formatNumber(s?.connectedAccounts)} loading={loading} icon={<Wallet />} />
         <StatCard label="Active masters" value={formatNumber(s?.activeMasters)} loading={loading} icon={<UserCheck />} hint="With an active strategy" />
         <StatCard label="Active followers" value={formatNumber(s?.activeFollowers)} loading={loading} icon={<Users />} hint="Copy trading ON" />

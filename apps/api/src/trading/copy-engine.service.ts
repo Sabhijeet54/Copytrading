@@ -31,6 +31,13 @@ export interface MasterTradeInput extends PlaceOrderInput {
   lotSize?: number;
   timestamp: Date;
   raw?: unknown;
+  /** Entry signals: platform-managed target / stop loss. */
+  targetPrice?: number | null;
+  stopLossPrice?: number | null;
+  /** Exits: close this entry signal first (per-signal square off), then any other open signals FIFO. */
+  closeSignalId?: string;
+  /** Exits: why (TARGET, STOPLOSS, SQUARE_OFF, STRATEGY_EXIT, MASTER_EXIT…). */
+  exitReason?: string;
 }
 
 /** Outcome of one follower's copy of one master trade. */
@@ -361,6 +368,10 @@ export class CopyEngineService {
           status: t.status,
           eventTimestamp: t.timestamp,
           rawPayload: (t.raw ?? { lotSize }) as Prisma.InputJsonValue,
+          // An entry becomes an OPEN signal that can be squared off / hit target or stop loss on its own.
+          signalStatus: isExit ? null : 'OPEN',
+          targetPrice: isExit ? undefined : (t.targetPrice ?? undefined),
+          stopLossPrice: isExit ? undefined : (t.stopLossPrice ?? undefined),
         },
       });
     } catch (err) {
@@ -369,6 +380,12 @@ export class CopyEngineService {
         return;
       }
       throw err;
+    }
+
+    if (isExit && strategy.id) {
+      await this.closeSignals(strategy.id, t, t.filledQuantity > 0 ? t.filledQuantity : t.quantity).catch((err) =>
+        this.logger.warn(`Signal bookkeeping failed: ${(err as Error).message}`),
+      );
     }
 
     const now = new Date();
@@ -475,6 +492,48 @@ export class CopyEngineService {
         });
       }
     }
+  }
+
+  /**
+   * Exit bookkeeping on entry signals: the exited quantity closes `t.closeSignalId` first, then the other open
+   * signals of the same instrument oldest-first. Records average exit price, reason and master P&L per signal.
+   */
+  private async closeSignals(strategyId: string, t: MasterTradeInput, qty: number): Promise<void> {
+    const exitSide = t.side;
+    const entrySide = exitSide === 'BUY' ? 'SELL' : 'BUY';
+    const exitPx = t.averagePrice ?? t.price ?? this.prices?.get(instrumentKey(t.exchange, t.symbol)) ?? null;
+    const open = await this.prisma.masterTrade.findMany({
+      where: { strategyId, exchange: t.exchange, symbol: t.symbol, productType: t.productType, side: entrySide, signalStatus: 'OPEN' },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (t.closeSignalId) open.sort((a, b) => (a.id === t.closeSignalId ? -1 : b.id === t.closeSignalId ? 1 : 0));
+    let left = qty;
+    for (const sig of open) {
+      if (left <= 0) break;
+      const size = sig.filledQuantity > 0 ? sig.filledQuantity : sig.quantity;
+      const remaining = size - sig.closedQuantity;
+      if (remaining <= 0) continue;
+      const q = Math.min(remaining, left);
+      left -= q;
+      const entry = F(sig.averagePrice) ?? F(sig.price);
+      const dir = sig.side === 'BUY' ? 1 : -1;
+      const pnl = exitPx != null && entry != null ? q * (exitPx - entry) * dir : 0;
+      const oldExit = F(sig.exitPrice);
+      const avgExit = exitPx == null ? oldExit : oldExit == null || sig.closedQuantity === 0 ? exitPx : (oldExit * sig.closedQuantity + exitPx * q) / (sig.closedQuantity + q);
+      const closed = sig.closedQuantity + q;
+      await this.prisma.masterTrade.update({
+        where: { id: sig.id },
+        data: {
+          closedQuantity: closed,
+          exitPrice: avgExit ?? undefined,
+          realizedPnl: (F(sig.realizedPnl) ?? 0) + pnl,
+          exitedAt: new Date(),
+          exitReason: t.exitReason ?? 'MASTER_EXIT',
+          signalStatus: closed >= size ? 'CLOSED' : 'OPEN',
+        },
+      });
+    }
+    this.realtime?.toUser(open[0]?.masterUserId ?? '', WsEvent.MASTER_TRADE_DETECTED, { symbol: t.symbol, side: t.side, signalClosed: true });
   }
 
   /** Paper bookkeeping: net position, average price and realized P&L. */

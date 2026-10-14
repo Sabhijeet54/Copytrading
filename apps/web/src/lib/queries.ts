@@ -184,3 +184,32 @@ export function useAdminAction<TBody, TResult = unknown>(method: 'POST' | 'PATCH
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin'] }),
   });
 }
+
+// ------------------------------------------------------------------ admin: users & licence
+
+export interface CreateUserInput {
+  name: string;
+  email: string;
+  mobile?: string;
+  password: string;
+  role: 'ADMIN' | 'MASTER' | 'FOLLOWER';
+  licenceDays?: number;
+}
+
+export function useAdminUserMutations() {
+  const qc = useQueryClient();
+  const done = () => void qc.invalidateQueries({ queryKey: ['admin'] });
+  return {
+    create: useMutation({ mutationFn: (body: CreateUserInput) => api('/admin/users', { method: 'POST', body }), onSuccess: done }),
+    update: useMutation({
+      mutationFn: ({ id, ...body }: { id: string; name?: string; mobile?: string; role?: 'ADMIN' | 'MASTER' | 'FOLLOWER' }) =>
+        api(`/admin/users/${id}`, { method: 'PATCH', body }),
+      onSuccess: done,
+    }),
+    licence: useMutation({
+      mutationFn: ({ id, days, extend }: { id: string; days: number; extend: boolean }) => api(`/admin/users/${id}/licence`, { method: 'POST', body: { days, extend } }),
+      onSuccess: done,
+    }),
+    revoke: useMutation({ mutationFn: (id: string) => api(`/admin/users/${id}/licence/revoke`, { method: 'POST' }), onSuccess: done }),
+  };
+}

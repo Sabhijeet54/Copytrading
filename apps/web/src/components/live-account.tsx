@@ -6,7 +6,7 @@ import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { brokerLabel, formatINR, formatNumber, humanize } from '@/lib/format';
+import { brokerLabel, formatDateTime, formatINR, formatNumber, humanize } from '@/lib/format';
 import { type LiveAccount, type LivePosition, type LtpMap, type PaperPosition, useExitPosition, useLtps } from '@/lib/trading';
 import { cn } from '@/lib/utils';
 
@@ -259,15 +259,19 @@ export function PaperPositionsCard({
   canExit?: boolean;
   clientUserId?: string;
 }) {
-  const ltps = useLtps(rows.filter((p) => p.quantity !== 0).map((p) => keyOf(p.exchange, p.symbol))).data;
+  const open = rows.filter((p) => p.quantity !== 0);
+  const closed = rows.filter((p) => p.quantity === 0);
+  const [showClosed, setShowClosed] = useState(false);
+  const ltps = useLtps(open.map((p) => keyOf(p.exchange, p.symbol))).data;
   const { exit, pending, pendingVars } = useExit(clientUserId);
+  const closedPnl = closed.reduce((s, p) => s + Number(p.realizedPnl), 0);
   return (
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <CardDescription>Simulated fills (PAPER_MODE / paper accounts). No real orders were placed.</CardDescription>
+        <CardDescription>Simulated fills (PAPER_MODE / paper accounts). No real orders were placed. Exited positions move to Closed history.</CardDescription>
       </CardHeader>
-      <CardContent className="overflow-x-auto">
+      <CardContent className="grid gap-4 overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -281,10 +285,10 @@ export function PaperPositionsCard({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.length === 0 ? (
-              <Empty cols={canExit ? 7 : 6} text="No paper positions yet" />
+            {open.length === 0 ? (
+              <Empty cols={canExit ? 7 : 6} text="No open positions" />
             ) : (
-              rows.map((p) => {
+              open.map((p) => {
                 const ltp = liveLtp(ltps, p.exchange, p.symbol, p.lastPrice == null ? null : Number(p.lastPrice));
                 const unrealized = p.quantity !== 0 && ltp != null ? p.quantity * (ltp - Number(p.averagePrice)) : Number(p.unrealizedPnl);
                 const isExiting = pending && pendingVars?.symbol === p.symbol && pendingVars?.exchange === p.exchange && pendingVars?.productType === p.productType;
@@ -315,6 +319,49 @@ export function PaperPositionsCard({
             )}
           </TableBody>
         </Table>
+        {closed.length > 0 ? (
+          <section>
+            <button
+              type="button"
+              className="flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm hover:bg-muted"
+              aria-expanded={showClosed}
+              onClick={() => setShowClosed((v) => !v)}
+            >
+              <span className="font-medium">
+                Closed positions ({closed.length}) {showClosed ? '▴' : '▾'}
+              </span>
+              <span>
+                Realized <Pnl value={closedPnl} />
+              </span>
+            </button>
+            {showClosed ? (
+              <Table className="mt-2">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Symbol</TableHead>
+                    <TableHead className="text-right">Last exit</TableHead>
+                    <TableHead>Closed at</TableHead>
+                    <TableHead className="text-right">Realized P&amp;L</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {closed.map((p) => (
+                    <TableRow key={p.id}>
+                      <TableCell className="font-medium">
+                        {p.symbol} <span className="text-xs text-muted-foreground">{p.exchange} · {humanize(p.productType)}</span>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{formatINR(p.lastPrice)}</TableCell>
+                      <TableCell className="text-xs">{p.updatedAt ? formatDateTime(p.updatedAt) : '—'}</TableCell>
+                      <TableCell className="text-right">
+                        <Pnl value={p.realizedPnl} />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : null}
+          </section>
+        ) : null}
       </CardContent>
     </Card>
   );

@@ -12,6 +12,7 @@ import { RealtimeService } from '../realtime/realtime.gateway';
 import type { BrokerAdapter } from './broker-adapter';
 import { ClientRegistryService } from './client-registry.service';
 import { CopyEngineService } from './copy-engine.service';
+import { SignalService } from './signal.service';
 import { TradingService } from './trading.service';
 
 export interface SquareOffResult {
@@ -52,6 +53,7 @@ export class RiskService implements OnApplicationBootstrap, OnModuleDestroy {
     private readonly audit: AuditService,
     private readonly notifier: NotifyService,
     private readonly realtime: RealtimeService,
+    private readonly signals: SignalService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -121,6 +123,9 @@ export class RiskService implements OnApplicationBootstrap, OnModuleDestroy {
     if (now.mins < h * 60 + m || now.mins > 15 * 60 + 30 || this.squaredOffDay === now.day) return;
     this.squaredOffDay = now.day;
     this.logger.warn(`Auto square-off (${t} IST) started`);
+    // Intraday signals first: closes them in history and exits each follower's copy of them.
+    const sig = await this.signals.squareOffWhere({ productType: 'INTRADAY' }, 'AUTO_SQUARE_OFF').catch(() => ({ closed: 0 }));
+    if (sig.closed) this.logger.warn(`Auto square-off closed ${sig.closed} intraday signal(s)`);
     const results = await this.squareOffAll({ intradayOnly: true });
     const orders = results.reduce((s, r) => s + r.orders, 0);
     await this.audit.log({ action: 'AUTO_SQUARE_OFF', metadata: { time: t, accounts: results.length, orders } });
@@ -138,6 +143,8 @@ export class RiskService implements OnApplicationBootstrap, OnModuleDestroy {
     });
     this.registry.scheduleReload(0);
     const results = await this.squareOffAll({ intradayOnly: false, includeAllTradingAccounts: true });
+    // Copying is halted, so this only books every open signal as closed (positions were squared off above).
+    await this.signals.squareOffWhere({}, 'KILL_SWITCH', adminId).catch(() => undefined);
     await this.audit.log({ action: 'KILL_SWITCH_ACTIVATED', actorUserId: adminId, metadata: { reason, stoppedFollowers: stopped.count, accounts: results.length } });
     await this.prisma.systemEvent
       .create({ data: { source: 'API', type: 'KILL_SWITCH', severity: 'CRITICAL', message: `Kill switch by admin: ${reason}`, context: { adminId } } })

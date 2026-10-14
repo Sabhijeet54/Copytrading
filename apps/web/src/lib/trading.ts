@@ -49,6 +49,7 @@ export interface PaperPosition {
   lastPrice: string | null;
   realizedPnl: string;
   unrealizedPnl: string;
+  updatedAt?: string;
 }
 export type MasterTradeRow = MasterTradeView & { copyStatusCounts: Record<string, number> };
 export type MasterTradeDetail = MasterTradeView & { copyOrders: CopyOrderView[] };
@@ -83,6 +84,8 @@ export interface MasterOrderInput {
   price?: number;
   triggerPrice?: number;
   lotSize?: number;
+  targetPrice?: number;
+  stopLossPrice?: number;
 }
 export interface FollowInput {
   brokerAccountId: string;
@@ -270,7 +273,7 @@ export const useAdminLatency = () => useQuery({ queryKey: ['admin', 'latency'], 
 export function useExitStrategy() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api<{ orders: number; failed: number }>(`/master/strategies/${id}/exit-all`, { method: 'POST' }),
+    mutationFn: (id: string) => api<{ signalsClosed?: number; orders: number; failed: number; errors?: string[] }>(`/master/strategies/${id}/exit-all`, { method: 'POST' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['master'] }),
   });
 }
@@ -281,3 +284,68 @@ export function useExitAllMine() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['follow'] }),
   });
 }
+
+// ------------------------------------------------------------------ signals
+
+export interface SignalRow {
+  id: string;
+  strategyId: string | null;
+  strategyName: string | null;
+  exchange: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  productType: string;
+  quantity: number;
+  openQuantity: number;
+  entryPrice: number | null;
+  entryAt: string;
+  exitPrice: number | null;
+  exitAt: string | null;
+  exitReason: string | null;
+  targetPrice: number | null;
+  stopLossPrice: number | null;
+  status: 'OPEN' | 'CLOSED';
+  realizedPnl: number;
+  ltp: number | null;
+  copyStatusCounts: Record<string, number>;
+}
+
+export const useSignals = (status: 'all' | 'open' | 'closed', scope: 'today' | 'all') =>
+  useQuery({
+    queryKey: ['master', 'signals', status, scope],
+    queryFn: () => api<SignalRow[]>('/master/signals', { query: { status, scope } }),
+    refetchInterval: 5_000,
+  });
+
+export function useSquareOffSignal(scope: 'master' | 'admin' = 'master') {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api<{ exitPrice: number | null; quantity: number; reason: string }>(`/${scope}/signals/${id}/square-off`, { method: 'POST' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['master'] });
+      void qc.invalidateQueries({ queryKey: ['admin-signals'] });
+    },
+  });
+}
+
+export function useSetSignalTpSl(scope: 'master' | 'admin' = 'master') {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, targetPrice, stopLossPrice }: { id: string; targetPrice: number | null; stopLossPrice: number | null }) =>
+      api(`/${scope}/signals/${id}/tpsl`, { method: 'PATCH', body: { targetPrice, stopLossPrice } }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['master', 'signals'] });
+      void qc.invalidateQueries({ queryKey: ['admin-signals'] });
+    },
+  });
+}
+
+export type AdminSignalRow = SignalRow & { masterName: string | null };
+
+export const useAdminSignals = (p: { from: string; to: string; strategyIds: string[]; status: 'all' | 'open' | 'closed' }) =>
+  useQuery({
+    queryKey: ['admin-signals', p],
+    queryFn: () =>
+      api<AdminSignalRow[]>('/admin/signals', { query: { from: p.from, to: p.to, status: p.status, strategyIds: p.strategyIds.join(',') || undefined } }),
+    refetchInterval: 5_000,
+  });

@@ -193,6 +193,10 @@ model User {
   disabledReason  String?
   /// Optional Telegram chat id for personal alerts (order fill/fail, disconnect, loss limit).
   telegramChatId  String?
+  /// Subscription licence: copy trading stops automatically after licenceExpiresAt (null = no licence assigned).
+  licenceDays       Int?
+  licenceAssignedAt DateTime?
+  licenceExpiresAt  DateTime?
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 
@@ -210,6 +214,8 @@ model User {
   transactions       Transaction[]
 
   @@index([role, status])
+
+  @@index([licenceExpiresAt])
 }
 
 /// Refresh-token session. Only the SHA-256 hash of the token is stored.
@@ -421,6 +427,19 @@ model MasterTrade {
   status          OrderStatus
   eventTimestamp  DateTime
   rawPayload      Json?
+  /// Entry signals only: OPEN until fully exited (square off / target / stop loss / master exit), then CLOSED.
+  signalStatus    String?
+  targetPrice     Decimal?    @db.Decimal(18, 4)
+  stopLossPrice   Decimal?    @db.Decimal(18, 4)
+  /// Quantity of this entry already exited.
+  closedQuantity  Int         @default(0)
+  /// Average exit price of the exited quantity.
+  exitPrice       Decimal?    @db.Decimal(18, 4)
+  exitedAt        DateTime?
+  /// TARGET | STOPLOSS | SQUARE_OFF | STRATEGY_EXIT | MASTER_EXIT | AUTO_SQUARE_OFF
+  exitReason      String?
+  /// Master-side P&L of the exited quantity of this signal (per master quantity).
+  realizedPnl     Decimal?    @db.Decimal(18, 4)
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 
@@ -434,6 +453,7 @@ model MasterTrade {
   @@index([masterUserId, createdAt])
   @@index([strategyId])
   @@index([createdAt])
+  @@index([signalStatus])
 }
 
 /// A follower order created by the copy engine for one master trade.

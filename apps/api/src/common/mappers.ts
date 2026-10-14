@@ -86,7 +86,18 @@ export function toAdminUserListItem(u: User & { brokerAccounts: Pick<BrokerAccou
     lastLoginAt: iso(u.lastLoginAt),
     createdAt: u.createdAt.toISOString(),
     brokerAccounts: u.brokerAccounts.map((b) => ({ id: b.id, broker: b.broker, status: b.status })),
+    licenceDays: u.licenceDays,
+    licenceAssignedAt: iso(u.licenceAssignedAt),
+    licenceExpiresAt: iso(u.licenceExpiresAt),
+    licenceStatus: licenceStatus(u.licenceExpiresAt),
   };
+}
+
+const WEEK_MS = 7 * 86_400_000;
+export function licenceStatus(expiresAt: Date | null, now = Date.now()): 'NONE' | 'ACTIVE' | 'EXPIRING' | 'EXPIRED' {
+  if (!expiresAt) return 'NONE';
+  const t = expiresAt.getTime();
+  return t <= now ? 'EXPIRED' : t - now <= WEEK_MS ? 'EXPIRING' : 'ACTIVE';
 }
 
 export function toStrategyView(

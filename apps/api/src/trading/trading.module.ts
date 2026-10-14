@@ -8,6 +8,7 @@ import { ClientAssignService } from './client-assign.service';
 import { FollowerController } from './follower.controller';
 import { MasterPollerService } from './master-poller.service';
 import { OrderMirrorService } from './order-mirror.service';
+import { SignalService } from './signal.service';
 import { MasterController } from './master.controller';
 import { RiskService } from './risk.service';
 import { TradingService } from './trading.service';
@@ -15,7 +16,7 @@ import { TradingService } from './trading.service';
 @Module({
   imports: [BrokersModule, MarketDataModule],
   controllers: [MasterController, FollowerController],
-  providers: [ClientAssignService, TradingService, ClientRegistryService, CopyEngineService, CopyReconcilerService, OrderMirrorService, MasterPollerService, RiskService],
-  exports: [ClientAssignService, CopyEngineService, CopyReconcilerService, RiskService, ClientRegistryService],
+  providers: [SignalService, ClientAssignService, TradingService, ClientRegistryService, CopyEngineService, CopyReconcilerService, OrderMirrorService, MasterPollerService, RiskService],
+  exports: [SignalService, ClientAssignService, CopyEngineService, CopyReconcilerService, RiskService, ClientRegistryService],
 })
 export class TradingModule {}

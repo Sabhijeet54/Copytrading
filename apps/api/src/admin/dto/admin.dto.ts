@@ -1,5 +1,6 @@
-import { Transform } from 'class-transformer';
-import { IsDateString, IsEnum, IsIn, IsOptional, IsString, Length, MaxLength } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsBoolean, IsDateString, IsEmail, IsEnum, IsIn, IsInt, IsOptional, IsString, Length, Matches, Max, MaxLength, Min } from 'class-validator';
+import { PASSWORD_MESSAGE, PASSWORD_RULE } from '../../auth/dto/auth.dto';
 import {
   AuditAction,
   BrokerAccountStatus,
@@ -19,6 +20,39 @@ export class AdminUsersQueryDto extends PaginationQueryDto {
   @IsOptional() @IsEnum(Role) role?: Role;
   @IsOptional() @IsEnum(UserStatus) status?: UserStatus;
   @IsOptional() @IsEnum(BrokerName) broker?: BrokerName;
+  @IsOptional() @IsIn(['NONE', 'ACTIVE', 'EXPIRING', 'EXPIRED']) licence?: 'NONE' | 'ACTIVE' | 'EXPIRING' | 'EXPIRED';
+}
+
+const lower = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
+const ROLES = ['ADMIN', 'MASTER', 'FOLLOWER'] as const;
+
+export class CreateUserDto {
+  @Transform(trim) @IsString() @Length(2, 100) name!: string;
+  @Transform(lower) @IsEmail() @MaxLength(254) email!: string;
+  @IsOptional() @Transform(trim) @Matches(/^[0-9+\-\s]{7,20}$/, { message: 'Invalid mobile number' }) mobile?: string;
+  @IsString() @Matches(PASSWORD_RULE, { message: PASSWORD_MESSAGE }) password!: string;
+  @IsIn(ROLES) role!: (typeof ROLES)[number];
+  /** Optional licence to assign right away. */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(3650) licenceDays?: number;
+}
+
+export class UpdateUserDto {
+  @IsOptional() @Transform(trim) @IsString() @Length(2, 100) name?: string;
+  @IsOptional() @Transform(trim) @Matches(/^[0-9+\-\s]{7,20}$/, { message: 'Invalid mobile number' }) mobile?: string;
+  @IsOptional() @IsIn(ROLES) role?: (typeof ROLES)[number];
+}
+
+export class AssignLicenceDto {
+  @Type(() => Number) @IsInt() @Min(1) @Max(3650) days!: number;
+  /** true (default): add the days to a licence that is still running; false: start fresh from today. */
+  @IsOptional() @IsBoolean() extend?: boolean;
+}
+
+export class AdminSignalsQueryDto {
+  @IsOptional() @IsDateString() from?: string;
+  @IsOptional() @IsDateString() to?: string;
+  @IsOptional() @IsString() @MaxLength(400) strategyIds?: string;
+  @IsOptional() @IsIn(['all', 'open', 'closed']) status?: 'all' | 'open' | 'closed';
 }
 
 export class AdminBrokerAccountsQueryDto extends PaginationQueryDto {

@@ -49,7 +49,11 @@ import {
   AdminSystemEventsQueryDto,
   AdminUsersQueryDto,
   UpdateUserStatusDto,
+  AssignLicenceDto,
+  CreateUserDto,
+  UpdateUserDto,
 } from './dto/admin.dto';
+import { hashPassword } from '@ctp/shared';
 
 const IST_OFFSET_MS = 330 * 60 * 1000;
 
@@ -112,6 +116,17 @@ export class AdminService {
       this.prisma.copyOrder.count({ where: { createdAt: { gte: today }, status: 'FILLED' } }),
       this.prisma.copyOrder.count({ where: { createdAt: { gte: today }, status: { in: ['FAILED', 'REJECTED'] } } }),
     ]);
+    const now = new Date();
+    const ist = new Date(now.getTime() + 330 * 60_000);
+    const monthStart = new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), 1) - 330 * 60_000);
+    const lastMonthStart = new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth() - 1, 1) - 330 * 60_000);
+    const [newUsersThisMonth, newUsersLastMonth, expiredUsers, expiringThisWeek, activeClients] = await Promise.all([
+      this.prisma.user.count({ where: { createdAt: { gte: monthStart } } }),
+      this.prisma.user.count({ where: { createdAt: { gte: lastMonthStart, lt: monthStart } } }),
+      this.prisma.user.count({ where: { licenceExpiresAt: { lte: now } } }),
+      this.prisma.user.count({ where: { licenceExpiresAt: { gt: now, lte: new Date(now.getTime() + 7 * 86_400_000) } } }),
+      this.prisma.user.count({ where: { role: 'FOLLOWER', status: 'ACTIVE', brokerAccounts: { some: { status: 'CONNECTED', mode: 'TRADING' } } } }),
+    ]);
     return {
       totalUsers,
       connectedAccounts,
@@ -122,6 +137,11 @@ export class AdminService {
       successfulCopyOrders,
       failedCopyOrders,
       paperMode: this.config.PAPER_MODE,
+      newUsersThisMonth,
+      newUsersLastMonth,
+      expiredUsers,
+      expiringThisWeek,
+      activeClients,
     };
   }
 
@@ -132,6 +152,7 @@ export class AdminService {
       ...(q.role ? { role: q.role } : {}),
       ...(q.status ? { status: q.status } : {}),
       ...(q.broker ? { brokerAccounts: { some: { broker: q.broker } } } : {}),
+      ...licenceWhere(q.licence),
       ...(q.search
         ? {
             OR: [
@@ -153,6 +174,70 @@ export class AdminService {
       this.prisma.user.count({ where }),
     ]);
     return { items: items.map(toAdminUserListItem), total, page: q.page, pageSize: q.pageSize };
+  }
+
+  // ------------------------------------------------------------------ add / edit / licence
+
+  async createUser(admin: RequestUser, dto: CreateUserDto, client: ClientInfo): Promise<AdminUserDetail> {
+    const exists = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    if (exists) throw new BadRequestException('A user with this email already exists');
+    const now = new Date();
+    const user = await this.prisma.user.create({
+      data: {
+        name: dto.name,
+        email: dto.email,
+        mobile: dto.mobile ?? null,
+        role: dto.role,
+        passwordHash: await hashPassword(dto.password),
+        emailVerifiedAt: now, // created by an admin: no verification mail needed
+        ...(dto.licenceDays ? { licenceDays: dto.licenceDays, licenceAssignedAt: now, licenceExpiresAt: new Date(now.getTime() + dto.licenceDays * 86_400_000) } : {}),
+      },
+    });
+    await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: admin.id, targetType: 'User', targetId: user.id, metadata: { createdByAdmin: true, role: dto.role, licenceDays: dto.licenceDays ?? null }, client });
+    return this.getUser(user.id);
+  }
+
+  async updateUser(admin: RequestUser, id: string, dto: UpdateUserDto, client: ClientInfo): Promise<AdminUserDetail> {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+    if (dto.role && dto.role !== user.role) {
+      if (id === admin.id) throw new BadRequestException('You cannot change your own role');
+      if (user.role === 'MASTER' && (await this.prisma.strategy.count({ where: { masterUserId: id, status: { in: ['ACTIVE', 'PAUSED'] } } }))) {
+        throw new BadRequestException('Archive this master’s strategies before changing the role');
+      }
+      if (user.role === 'FOLLOWER' && (await this.prisma.strategyFollower.count({ where: { followerUserId: id, copyStatus: { not: 'OFF' } } }))) {
+        throw new BadRequestException('Stop this client’s copy trading before changing the role');
+      }
+    }
+    await this.prisma.user.update({ where: { id }, data: { name: dto.name, mobile: dto.mobile, role: dto.role } });
+    await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: admin.id, targetType: 'User', targetId: id, metadata: { ...dto, byAdmin: true }, client });
+    return this.getUser(id);
+  }
+
+  /** Assigns (or extends) a licence. Copy trading resumes automatically for subscriptions that are ON. */
+  async assignLicence(admin: RequestUser, id: string, dto: AssignLicenceDto, client: ClientInfo): Promise<AdminUserDetail> {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+    const now = new Date();
+    const running = user.licenceExpiresAt && user.licenceExpiresAt > now;
+    const base = dto.extend !== false && running ? user.licenceExpiresAt! : now;
+    const expires = new Date(base.getTime() + dto.days * 86_400_000);
+    await this.prisma.user.update({
+      where: { id },
+      data: { licenceDays: (dto.extend !== false && running ? (user.licenceDays ?? 0) : 0) + dto.days, licenceAssignedAt: now, licenceExpiresAt: expires },
+    });
+    await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: admin.id, targetType: 'User', targetId: id, metadata: { licenceDays: dto.days, extend: dto.extend !== false, expiresAt: expires.toISOString() }, client });
+    this.accountEvents.emit({ type: 'settings', brokerAccountId: '', userId: id });
+    return this.getUser(id);
+  }
+
+  async revokeLicence(admin: RequestUser, id: string, client: ClientInfo): Promise<AdminUserDetail> {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+    await this.prisma.user.update({ where: { id }, data: { licenceExpiresAt: new Date() } });
+    await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: admin.id, targetType: 'User', targetId: id, metadata: { licenceRevoked: true }, client });
+    this.accountEvents.emit({ type: 'settings', brokerAccountId: '', userId: id });
+    return this.getUser(id);
   }
 
   async getUser(id: string): Promise<AdminUserDetail> {
@@ -526,5 +611,22 @@ export class AdminService {
       recentEvents: recent.map(toSystemEventView),
       copyHalt,
     };
+  }
+}
+
+function licenceWhere(l?: 'NONE' | 'ACTIVE' | 'EXPIRING' | 'EXPIRED'): Prisma.UserWhereInput {
+  const now = new Date();
+  const week = new Date(now.getTime() + 7 * 86_400_000);
+  switch (l) {
+    case 'NONE':
+      return { licenceExpiresAt: null };
+    case 'EXPIRED':
+      return { licenceExpiresAt: { lte: now } };
+    case 'EXPIRING':
+      return { licenceExpiresAt: { gt: now, lte: week } };
+    case 'ACTIVE':
+      return { licenceExpiresAt: { gt: now } };
+    default:
+      return {};
   }
 }

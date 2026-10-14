@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, NotFoundException, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Inject, NotFoundException, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { clientInfo } from '../common/client-info';
 import { CurrentUser, RequestUser, Roles } from '../common/decorators/auth.decorators';
@@ -6,13 +6,18 @@ import { AdminService } from './admin.service';
 import { CopyEngineService } from '../trading/copy-engine.service';
 import { RiskService } from '../trading/risk.service';
 import { ClientAssignService } from '../trading/client-assign.service';
-import { AssignClientDto } from '../trading/trading.dto';
+import { AssignClientDto, SignalTpSlDto } from '../trading/trading.dto';
+import { SignalService } from '../trading/signal.service';
 import { toStrategyFollowerView } from '../common/mappers';
 import { PRISMA } from '../common/prisma/prisma.service';
 import type { PrismaClient } from '@ctp/database';
 import { startOfTradingDayIST } from './admin.service';
 import {
   AdminAuditLogsQueryDto,
+  AdminSignalsQueryDto,
+  AssignLicenceDto,
+  CreateUserDto,
+  UpdateUserDto,
   AdminBrokerAccountsQueryDto,
   AdminCopyOrdersQueryDto,
   AdminMasterTradesQueryDto,
@@ -33,6 +38,7 @@ export class AdminController {
     private readonly risk: RiskService,
     private readonly engine: CopyEngineService,
     private readonly assigner: ClientAssignService,
+    private readonly signals: SignalService,
     @Inject(PRISMA) private readonly prisma: PrismaClient,
   ) {}
 
@@ -73,6 +79,47 @@ export class AdminController {
   @Get('users/:id')
   user(@Param('id') id: string) {
     return this.admin.getUser(id);
+  }
+
+  @Post('users')
+  createUser(@CurrentUser() me: RequestUser, @Body() dto: CreateUserDto, @Req() req: Request) {
+    return this.admin.createUser(me, dto, clientInfo(req));
+  }
+
+  @Patch('users/:id')
+  updateUser(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: UpdateUserDto, @Req() req: Request) {
+    return this.admin.updateUser(me, id, dto, clientInfo(req));
+  }
+
+  @Post('users/:id/licence')
+  assignLicence(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: AssignLicenceDto, @Req() req: Request) {
+    return this.admin.assignLicence(me, id, dto, clientInfo(req));
+  }
+
+  @Post('users/:id/licence/revoke')
+  revokeLicence(@CurrentUser() me: RequestUser, @Param('id') id: string, @Req() req: Request) {
+    return this.admin.revokeLicence(me, id, clientInfo(req));
+  }
+
+  // --------------------------------------------------------------- signals (all masters)
+
+  @Get('signals')
+  listSignals(@Query() q: AdminSignalsQueryDto) {
+    const from = q.from ? new Date(`${q.from.slice(0, 10)}T00:00:00+05:30`) : undefined;
+    const to = q.to ? new Date(`${q.to.slice(0, 10)}T23:59:59.999+05:30`) : undefined;
+    const strategyIds = q.strategyIds ? q.strategyIds.split(',').filter(Boolean).slice(0, 50) : undefined;
+    return this.signals.list(null, { status: q.status ?? 'all', from, to, strategyIds });
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('signals/:id/square-off')
+  squareOffSignal(@CurrentUser() me: RequestUser, @Param('id') id: string) {
+    return this.signals.squareOff(null, id, 'SQUARE_OFF', me.id);
+  }
+
+  @Patch('signals/:id/tpsl')
+  setSignalTpSl(@Param('id') id: string, @Body() dto: SignalTpSlDto) {
+    return this.signals.setTpSl(null, id, dto.targetPrice ?? null, dto.stopLossPrice ?? null);
   }
 
   @Patch('users/:id/status')

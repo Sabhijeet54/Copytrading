@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import type { StrategyView } from '@ctp/types';
 import { ExitButton, LiveAccountCard, PaperPositionsCard, Pnl } from '@/components/live-account';
 import { MarketFeedPanel } from '@/components/market-feed-panel';
+import { SignalForm, SignalsCard } from '@/components/signal-desk';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
@@ -18,7 +19,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { brokerLabel, formatDateTime, formatINR, humanize } from '@/lib/format';
 import {
-  type MasterOrderInput,
   type StrategyInput,
   useAssignClient,
   useClientLive,
@@ -27,7 +27,6 @@ import {
   useMasterStrategies,
   useMasterTrade,
   useMasterTrades,
-  usePlaceMasterOrder,
   useSaveStrategy,
   useStrategyFollowers,
   useStrategyStatus,
@@ -154,131 +153,6 @@ function StrategyDialog({ open, onOpenChange, strategy }: { open: boolean; onOpe
         </form>
       </DialogContent>
     </Dialog>
-  );
-}
-
-// ---------------------------------------------------------------- trade form
-function TradeForm({ strategies }: { strategies: StrategyView[] }) {
-  const place = usePlaceMasterOrder();
-  const active = strategies.filter((s) => s.status === 'ACTIVE');
-  const [f, setF] = useState({ strategyId: '', exchange: 'NSE', symbol: '', side: 'BUY', quantity: '1', orderType: 'MARKET', productType: 'INTRADAY', price: '', triggerPrice: '', lotSize: '' });
-  useEffect(() => {
-    if (!f.strategyId && active[0]) setF((p) => ({ ...p, strategyId: active[0]!.id }));
-  }, [active, f.strategyId]);
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF((p) => ({ ...p, [k]: e.target.value }));
-  const needsPrice = f.orderType === 'LIMIT' || f.orderType === 'SL';
-  const needsTrigger = f.orderType === 'SL' || f.orderType === 'SL_M';
-
-  return (
-    <Card id="place-trade" className="scroll-mt-20">
-      <CardHeader>
-        <CardTitle>Place trade</CardTitle>
-        <CardDescription>The order goes to your broker and is copied to every client whose copying is ON.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {active.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Start a strategy first to trade it.</p>
-        ) : (
-          <form
-            className="grid gap-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const body: MasterOrderInput = {
-                strategyId: f.strategyId,
-                exchange: f.exchange,
-                symbol: f.symbol.trim().toUpperCase(),
-                side: f.side as 'BUY' | 'SELL',
-                quantity: Number(f.quantity),
-                orderType: f.orderType as MasterOrderInput['orderType'],
-                productType: f.productType as MasterOrderInput['productType'],
-                price: optNum(f.price),
-                triggerPrice: optNum(f.triggerPrice),
-                lotSize: optNum(f.lotSize),
-              };
-              place.mutate(body, {
-                onSuccess: (t) => {
-                  const ok = t.copyOrders.filter((c) => c.status === 'FILLED' || c.status === 'SUBMITTED').length;
-                  toast.success(`${t.side} ${t.quantity} ${t.symbol} placed · copied to ${ok}/${t.copyOrders.length} clients`);
-                },
-                onError: (err) => toast.error(err.message),
-              });
-            }}
-          >
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Strategy">
-                <Select value={f.strategyId} onChange={set('strategyId')}>
-                  {active.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="Side">
-                <div className="grid grid-cols-2 gap-2">
-                  <Button type="button" variant={f.side === 'BUY' ? 'default' : 'outline'} onClick={() => setF((p) => ({ ...p, side: 'BUY' }))}>
-                    Buy
-                  </Button>
-                  <Button type="button" variant={f.side === 'SELL' ? 'destructive' : 'outline'} onClick={() => setF((p) => ({ ...p, side: 'SELL' }))}>
-                    Sell
-                  </Button>
-                </div>
-              </Field>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <Field label="Exchange">
-                <Select value={f.exchange} onChange={set('exchange')}>
-                  {EXCHANGES.map((x) => (
-                    <option key={x}>{x}</option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="Symbol" hint="e.g. RELIANCE, NIFTY24OCT25000CE">
-                <Input value={f.symbol} onChange={set('symbol')} required />
-              </Field>
-              <Field label="Quantity">
-                <Input type="number" min={1} value={f.quantity} onChange={set('quantity')} required />
-              </Field>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <Field label="Order type">
-                <Select value={f.orderType} onChange={set('orderType')}>
-                  <option value="MARKET">Market</option>
-                  <option value="LIMIT">Limit</option>
-                  <option value="SL">Stop-loss limit</option>
-                  <option value="SL_M">Stop-loss market</option>
-                </Select>
-              </Field>
-              <Field label="Product">
-                <Select value={f.productType} onChange={set('productType')}>
-                  <option value="INTRADAY">Intraday (MIS)</option>
-                  <option value="DELIVERY">Delivery (CNC)</option>
-                  <option value="CARRY_FORWARD">Carry forward (NRML)</option>
-                </Select>
-              </Field>
-              <Field label="Lot size" hint="F&O only — client qty is rounded to lots">
-                <Input type="number" min={1} value={f.lotSize} onChange={set('lotSize')} placeholder="1" />
-              </Field>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label={needsPrice ? 'Price' : 'Price (optional, used for paper fills)'}>
-                <Input type="number" step="0.05" min={0} value={f.price} onChange={set('price')} required={needsPrice} />
-              </Field>
-              {needsTrigger ? (
-                <Field label="Trigger price">
-                  <Input type="number" step="0.05" min={0} value={f.triggerPrice} onChange={set('triggerPrice')} required />
-                </Field>
-              ) : null}
-            </div>
-            <div>
-              <Button type="submit" disabled={place.isPending} variant={f.side === 'SELL' ? 'destructive' : 'default'}>
-                {place.isPending ? 'Placing…' : `${f.side === 'BUY' ? 'Buy' : 'Sell'} & copy to clients`}
-              </Button>
-            </div>
-          </form>
-        )}
-      </CardContent>
-    </Card>
   );
 }
 
@@ -541,10 +415,10 @@ function TradesCard() {
   const q = useMasterTrades();
   const [open, setOpen] = useState<string | null>(null);
   return (
-    <Card id="trades" className="scroll-mt-20">
+    <Card id="order-log" className="scroll-mt-20">
       <CardHeader>
-        <CardTitle>Recent trades</CardTitle>
-        <CardDescription>Trades placed here or detected in your broker app, and how they were copied.</CardDescription>
+        <CardTitle>Order log</CardTitle>
+        <CardDescription>Every entry and exit (placed here, auto TP/SL, or detected in your broker app) and how it was copied to each client.</CardDescription>
       </CardHeader>
       <CardContent className="overflow-x-auto">
         <Table>
@@ -695,10 +569,9 @@ export default function MasterDeskPage() {
           </CardContent>
         </Card>
 
-        <div className="grid gap-4 xl:grid-cols-2">
-          <TradeForm strategies={list} />
-          {sel ? <FollowersCard strategy={sel} /> : null}
-        </div>
+        <SignalForm strategies={list} />
+        <SignalsCard />
+        {sel ? <FollowersCard strategy={sel} /> : null}
 
         <TradesCard />
 
@@ -708,14 +581,17 @@ export default function MasterDeskPage() {
           <p className="text-sm text-muted-foreground">Connect Zerodha or Angel One from the Dashboard to see live data.</p>
         ) : null}
         {live.data?.live.map((a) => <LiveAccountCard key={a.accountId} a={a} />)}
-        {live.data && live.data.paperPositions.length > 0 ? <PaperPositionsCard rows={live.data.paperPositions} /> : null}
+        {live.data && live.data.paperPositions.length > 0 ? <PaperPositionsCard rows={live.data.paperPositions} title="My signal book (virtual)" /> : null}
       </div>
 
       <Dialog open={!!exitTarget} onOpenChange={(o) => !o && setExitTarget(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Exit all client positions · {exitTarget?.name}?</DialogTitle>
-            <DialogDescription>Places MARKET exit orders for every open copy position of this strategy in all client accounts.</DialogDescription>
+            <DialogTitle>Exit strategy · {exitTarget?.name}?</DialogTitle>
+            <DialogDescription>
+              Squares off every OPEN signal of this strategy (moves them to Closed history) and places MARKET exits for any copy position still open in
+              client accounts.
+            </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setExitTarget(null)}>
@@ -727,7 +603,10 @@ export default function MasterDeskPage() {
               onClick={() =>
                 exitTarget &&
                 exitAll.mutate(exitTarget.id, {
-                  onSuccess: (r) => (toast.success(`${r.orders} exit order(s) sent${r.failed ? `, ${r.failed} failed` : ''}`), setExitTarget(null)),
+                  onSuccess: (r) => (
+                    toast.success(`${r.signalsClosed ?? 0} signal(s) closed · ${r.orders} extra exit order(s)${r.failed ? ` · ${r.failed} failed` : ''}`),
+                    setExitTarget(null)
+                  ),
                   onError: (e) => toast.error(e.message),
                 })
               }

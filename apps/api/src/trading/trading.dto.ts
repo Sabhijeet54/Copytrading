@@ -49,6 +49,14 @@ export class MasterOrderDto {
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) price?: number;
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) triggerPrice?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) lotSize?: number;
+  /** Platform-managed target / stop loss for this signal (LTP based). */
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) targetPrice?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) stopLossPrice?: number;
+}
+
+export class SignalTpSlDto {
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) targetPrice?: number | null;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) stopLossPrice?: number | null;
 }
 
 export class AssignClientDto {

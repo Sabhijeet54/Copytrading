@@ -145,6 +145,8 @@ export const apiEnvSchema = baseSchema
     COPY_MAX_RETRIES: intFromString(3, 1),
     /** Failed copy orders older than this many seconds are not retried (the signal is stale). */
     COPY_RETRY_WINDOW_SEC: intFromString(30, 5),
+    /** true: clients without any licence are not copied. An expired licence always stops copying. */
+    LICENCE_REQUIRED: booleanFlag(false),
   })
   .superRefine((env, ctx) => {
     if (env.APP_ENV !== 'development' && !env.COOKIE_SECURE) {

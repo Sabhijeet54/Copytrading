@@ -219,6 +219,15 @@ export interface AdminDashboardStats {
   successfulCopyOrders: number;
   failedCopyOrders: number;
   paperMode: boolean;
+  /** Users registered this calendar month (IST) and last month, for the % change. */
+  newUsersThisMonth: number;
+  newUsersLastMonth: number;
+  /** Users whose licence has expired. */
+  expiredUsers: number;
+  /** Licences expiring in the next 7 days. */
+  expiringThisWeek: number;
+  /** Clients (followers) with a connected broker account. */
+  activeClients: number;
 }
 
 export interface AdminUserListItem {
@@ -232,6 +241,11 @@ export interface AdminUserListItem {
   lastLoginAt: IsoDate | null;
   createdAt: IsoDate;
   brokerAccounts: Pick<BrokerAccountView, 'id' | 'broker' | 'status'>[];
+  licenceDays: number | null;
+  licenceAssignedAt: IsoDate | null;
+  licenceExpiresAt: IsoDate | null;
+  /** NONE = no licence assigned, ACTIVE, EXPIRING (≤ 7 days), EXPIRED. */
+  licenceStatus: 'NONE' | 'ACTIVE' | 'EXPIRING' | 'EXPIRED';
 }
 
 export interface AdminUserDetail extends AdminUserListItem {
