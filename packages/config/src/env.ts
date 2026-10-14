@@ -114,6 +114,37 @@ export const apiEnvSchema = baseSchema
     TOKEN_EXPIRY_CHECK_MS: intFromString(60_000, 5_000),
     /** How often client P&L is polled for the daily-loss limit. 0 disables. */
     RISK_POLL_INTERVAL_MS: intFromString(30_000, 0),
+    /** Copy each new partial fill of a master order as it happens (false = wait until the master order is done). */
+    COPY_PARTIAL_FILLS: booleanFlag(true),
+    /** How often submitted follower orders are reconciled with the broker order book. 0 disables. */
+    COPY_RECONCILE_INTERVAL_MS: intFromString(15_000, 0),
+    /** New entries are skipped when LTP moved more than this % away from the master's fill price. 0 disables. */
+    MAX_ENTRY_DEVIATION_PCT: z
+      .string()
+      .optional()
+      .transform((v, ctx) => {
+        if (v === undefined || v.trim() === '') return 2;
+        const n = Number(v);
+        if (!Number.isFinite(n) || n < 0) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'MAX_ENTRY_DEVIATION_PCT must be a number >= 0' });
+          return z.NEVER;
+        }
+        return n;
+      }),
+    /** A live price older than this (seconds) counts as stale. */
+    STALE_PRICE_MAX_AGE_SEC: intFromString(15, 1),
+    /** Block new entries (never exits) during market hours when no fresh live price is available. */
+    COPY_BLOCK_ON_STALE_PRICE: booleanFlag(false),
+    /** Mirror pending master SL / SL-M / LIMIT exit orders to followers and keep them in sync (modify / cancel). */
+    COPY_MIRROR_EXIT_ORDERS: booleanFlag(true),
+    /** Seconds after the master's SL/target filled before a still-pending follower order is cancelled and exited at MARKET. */
+    COPY_MIRROR_FALLBACK_SEC: intFromString(20, 5),
+    /** A LIMIT/SL entry copy order still open after this many seconds is cancelled. 0 disables. */
+    COPY_CANCEL_PENDING_ENTRY_SEC: intFromString(60, 0),
+    /** Total attempts for a copy order that failed with a transient error (network, timeout, rate limit). */
+    COPY_MAX_RETRIES: intFromString(3, 1),
+    /** Failed copy orders older than this many seconds are not retried (the signal is stale). */
+    COPY_RETRY_WINDOW_SEC: intFromString(30, 5),
   })
   .superRefine((env, ctx) => {
     if (env.APP_ENV !== 'development' && !env.COOKIE_SECURE) {

@@ -9,6 +9,7 @@ import {
   BrokerOrder,
   BrokerPosition,
   canonicalSymbol,
+  ModifyOrderInput,
   num,
   PlaceOrderInput,
   toExchange,
@@ -48,7 +49,7 @@ export class ZerodhaAdapter implements BrokerAdapter {
     private readonly opts?: AdapterOptions,
   ) {}
 
-  private async call<T>(path: string, method: 'GET' | 'POST' = 'GET', form?: Record<string, string>): Promise<T> {
+  private async call<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', form?: Record<string, string>): Promise<T> {
     const { status: http, body } = await brokerFetch<Env<T>>(`${API_ROOT}${path}`, {
       method,
       headers: {
@@ -83,6 +84,18 @@ export class ZerodhaAdapter implements BrokerAdapter {
     return { brokerOrderId: d.order_id };
   }
 
+  async modifyOrder(o: ModifyOrderInput): Promise<void> {
+    assertCanTrade(this.opts);
+    const form: Record<string, string> = { order_type: TYPE_OUT[o.orderType], quantity: String(o.quantity), validity: 'DAY' };
+    if (o.price != null && o.orderType !== 'MARKET' && o.orderType !== 'SL_M') form.price = String(o.price);
+    if (o.triggerPrice != null && (o.orderType === 'SL' || o.orderType === 'SL_M')) form.trigger_price = String(o.triggerPrice);
+    await this.call(`/orders/regular/${encodeURIComponent(o.brokerOrderId)}`, 'PUT', form);
+  }
+
+  async cancelOrder(brokerOrderId: string): Promise<void> {
+    await this.call(`/orders/regular/${encodeURIComponent(brokerOrderId)}`, 'DELETE');
+  }
+
   async orders(): Promise<BrokerOrder[]> {
     const rows = (await this.call<Record<string, unknown>[]>('/orders')) ?? [];
     return rows.map((r) => ({
@@ -99,6 +112,8 @@ export class ZerodhaAdapter implements BrokerAdapter {
       averagePrice: num(r.average_price),
       status: status(String(r.status)),
       statusMessage: r.status_message ? String(r.status_message) : undefined,
+      tag: r.tag ? String(r.tag) : undefined,
+      triggerPrice: num(r.trigger_price),
       timestamp: new Date(String(r.exchange_timestamp ?? r.order_timestamp ?? Date.now()).replace(' ', 'T') + '+05:30'),
       raw: r,
     }));

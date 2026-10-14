@@ -104,6 +104,21 @@ export class AngelOneClient {
     };
   }
 
+  /**
+   * Mid-day session recovery with the refresh token (official SmartAPI SDK: POST /rest/auth/angelbroking/jwt/v1/generateTokens).
+   * The new JWT keeps the original daily expiry — this cannot extend a session past midnight.
+   * The new token is verified with getProfile before it is trusted.
+   */
+  async renewSession(jwt: string, refreshToken: string): Promise<AngelOneSession> {
+    const d = await this.call<{ jwtToken: string; refreshToken?: string; feedToken?: string }>(
+      '/rest/auth/angelbroking/jwt/v1/generateTokens',
+      'POST',
+      { refreshToken },
+      jwt,
+    );
+    return this.completeSession(d.jwtToken, d.refreshToken || refreshToken, d.feedToken);
+  }
+
   /** Terminates the SmartAPI session. Best effort. */
   async logout(clientCode: string, jwt: string): Promise<void> {
     await this.call('/rest/secure/angelbroking/user/v1/logout', 'POST', { clientcode: clientCode }, jwt).catch(() => undefined);

@@ -25,8 +25,11 @@ export interface BrokerOrder {
   filledQuantity: number;
   price: number | null;
   averagePrice: number | null;
+  triggerPrice?: number | null;
   status: OrderStatus;
   statusMessage?: string;
+  /** Order tag set when placing (e.g. "ctpcopy"). */
+  tag?: string;
   lotSize?: number;
   timestamp: Date;
   raw: unknown;
@@ -73,9 +76,16 @@ export function assertCanTrade(opts: AdapterOptions | undefined): void {
   if (opts?.dataOnly) throw new OrderBlockedError();
 }
 
+/** Fields of an open order that can be modified. */
+export interface ModifyOrderInput extends PlaceOrderInput {
+  brokerOrderId: string;
+}
+
 export interface BrokerAdapter {
   readonly broker: string;
   placeOrder(input: PlaceOrderInput): Promise<{ brokerOrderId: string }>;
+  modifyOrder(input: ModifyOrderInput): Promise<void>;
+  cancelOrder(brokerOrderId: string, orderType: OrderType): Promise<void>;
   orders(): Promise<BrokerOrder[]>;
   positions(): Promise<BrokerPosition[]>;
   holdings(): Promise<BrokerHolding[]>;

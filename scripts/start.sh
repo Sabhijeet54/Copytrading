@@ -3,8 +3,8 @@
 # need to be set as variables — everything else is derived from the public domain.
 set -e
 
-DOMAIN="${PUBLIC_DOMAIN:-$RAILWAY_PUBLIC_DOMAIN}"
-if [ -z "$DOMAIN" ]; then echo "Set PUBLIC_DOMAIN (or generate a Railway domain)"; exit 1; fi
+DOMAIN="${PUBLIC_DOMAIN:-${RENDER_EXTERNAL_HOSTNAME:-$RAILWAY_PUBLIC_DOMAIN}}"
+if [ -z "$DOMAIN" ]; then echo "Set PUBLIC_DOMAIN (Render sets RENDER_EXTERNAL_HOSTNAME automatically)"; exit 1; fi
 ORIGIN="https://$DOMAIN"
 
 export NODE_ENV=production

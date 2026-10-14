@@ -256,6 +256,52 @@ export class BrokerSessionService {
     return cred ? this.box.decrypt(cred.encryptedAccessToken, account.id) : null;
   }
 
+  private readonly renewing = new Map<string, Promise<boolean>>();
+
+  /**
+   * Angel One: try to recover a rejected session with the stored refresh token (once at a time per account).
+   * Returns true when a verified new token was stored — the caller must then NOT mark the account expired.
+   */
+  renewAngelSession(account: BrokerAccount): Promise<boolean> {
+    if (account.broker !== 'ANGEL_ONE' || account.status !== 'CONNECTED') return Promise.resolve(false);
+    if (account.tokenExpiresAt && account.tokenExpiresAt.getTime() <= Date.now()) return Promise.resolve(false); // daily expiry: needs a new login
+    let p = this.renewing.get(account.id);
+    if (!p) {
+      p = this.doRenewAngel(account).finally(() => setTimeout(() => this.renewing.delete(account.id), 30_000));
+      this.renewing.set(account.id, p);
+    }
+    return p;
+  }
+
+  private async doRenewAngel(account: BrokerAccount): Promise<boolean> {
+    try {
+      const cred = await this.prisma.brokerCredential.findUnique({ where: { brokerAccountId: account.id } });
+      if (!cred?.encryptedRefreshToken) return false;
+      const jwt = this.box.decrypt(cred.encryptedAccessToken, account.id);
+      const refresh = this.box.decrypt(cred.encryptedRefreshToken, account.id);
+      const s = await this.angelOne().renewSession(jwt, refresh);
+      if (account.brokerClientId && s.clientCode !== account.brokerClientId) return false;
+      const extra = await this.decryptExtra(account);
+      if (s.feedToken) extra.feedToken = s.feedToken;
+      await this.prisma.brokerCredential.update({
+        where: { brokerAccountId: account.id },
+        data: {
+          encryptedAccessToken: this.box.encrypt(s.jwtToken, account.id),
+          encryptedRefreshToken: s.refreshToken ? this.box.encrypt(s.refreshToken, account.id) : cred.encryptedRefreshToken,
+          encryptedExtra: Object.values(extra).some(Boolean) ? this.box.encrypt(JSON.stringify(extra), account.id) : cred.encryptedExtra,
+        },
+      });
+      await this.prisma.brokerAccount.update({ where: { id: account.id }, data: { lastError: null } }).catch(() => undefined);
+      // Rebuild cached adapters with the new token.
+      this.accountEvents.emit({ type: 'settings', brokerAccountId: account.id, userId: account.userId });
+      this.logger.log(`Angel One session renewed for ${account.brokerClientId ?? account.id}`);
+      return true;
+    } catch (err) {
+      this.logger.warn(`Angel One session renewal failed for ${account.brokerClientId ?? account.id}: ${(err as Error).message}`);
+      return false;
+    }
+  }
+
   /** Decrypted broker-specific extras (e.g. Angel feedToken, Kite publicToken). */
   async decryptExtra(account: Pick<BrokerAccount, 'id'>): Promise<Record<string, string | undefined>> {
     const cred = await this.prisma.brokerCredential.findUnique({ where: { brokerAccountId: account.id } });

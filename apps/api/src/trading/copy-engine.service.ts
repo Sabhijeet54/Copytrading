@@ -13,7 +13,7 @@ import { PRISMA } from '../common/prisma/prisma.service';
 import { REDIS } from '../common/redis/redis.module';
 import { API_CONFIG, ApiConfig } from '../config/config.module';
 import { InstrumentsService } from '../market-data/instruments.service';
-import { MarketFeedService } from '../market-data/market-feed.service';
+import { isMarketOpen, MarketFeedService } from '../market-data/market-feed.service';
 import { instrumentKey, PriceCacheService } from '../market-data/price-cache.service';
 import { NotifyService } from '../realtime/notify.service';
 import { RealtimeService } from '../realtime/realtime.gateway';
@@ -175,12 +175,14 @@ export class CopyEngineService {
     const fullExit = closing && (after === 0 || Math.sign(after) !== Math.sign(before));
     const price = t.averagePrice ?? t.price ?? this.prices?.get(key) ?? null;
     this.feed?.ensure(t.exchange, t.symbol);
+    // Entry price guard (exits are never blocked): computed once, applied to every follower.
+    const entryBlock = closing ? null : this.entryPriceBlock(key, t.averagePrice ?? t.price ?? null);
 
     let results: CopyResult[] = [];
     if (halted) {
       this.logger.warn(`Kill switch active — master trade ${t.brokerOrderId} not copied.`);
     } else {
-      const ctx = { strategyId: strategy.id, t, signed, closing, fullExit, price, lotSize, masterQty, t0 };
+      const ctx = { strategyId: strategy.id, t, signed, closing, fullExit, price, lotSize, masterQty, t0, entryBlock };
       results = await Promise.all(registry.forStrategy(strategy.id).map((c) => this.copyOne(c, ctx)));
     }
     const totalMs = Math.round(performance.now() - t0);
@@ -208,17 +210,49 @@ export class CopyEngineService {
     const sent = results.filter((r) => r.attempts > 0).length;
     if (sent) this.logger.log(`Master ${t.side} ${masterQty} ${key} → ${sent} follower order(s) in ${totalMs} ms`);
 
-    await this.persist(tradeId, strategy, masterAccount, t, lotSize, results).catch((err) =>
+    await this.persist(tradeId, strategy, masterAccount, t, lotSize, results, closing).catch((err) =>
       this.logger.error(`Persist of trade ${tradeId} failed: ${(err as Error).message}`),
     );
     return { tradeId, results, totalMs };
+  }
+
+  /**
+   * Reason to skip a NEW entry because of price, or null:
+   *  - LTP moved more than MAX_ENTRY_DEVIATION_PCT away from the master's fill (follower would chase the price);
+   *  - optionally (COPY_BLOCK_ON_STALE_PRICE) no fresh live price during market hours.
+   */
+  private entryPriceBlock(key: string, masterPrice: number | null): string | null {
+    const maxAge = (this.config?.STALE_PRICE_MAX_AGE_SEC ?? 15) * 1000;
+    const tick = this.prices?.getTick(key);
+    const fresh = tick && Date.now() - tick.ts <= maxAge ? tick.ltp : null;
+    if (fresh === null) {
+      if (this.config?.COPY_BLOCK_ON_STALE_PRICE && isMarketOpen()) return 'Live price unavailable/stale — new entry blocked';
+      return null;
+    }
+    const maxDev = this.config?.MAX_ENTRY_DEVIATION_PCT ?? 0;
+    if (maxDev > 0 && masterPrice && masterPrice > 0) {
+      const dev = (Math.abs(fresh - masterPrice) / masterPrice) * 100;
+      if (dev > maxDev) return `Price moved ${dev.toFixed(2)}% from master fill (${masterPrice} → ${fresh}), limit ${maxDev}%`;
+    }
+    return null;
   }
 
   // ------------------------------------------------------------ hot path
 
   private async copyOne(
     c: ClientEntry,
-    x: { strategyId: string; t: MasterTradeInput; signed: number; closing: boolean; fullExit: boolean; price: number | null; lotSize: number; masterQty: number; t0: number },
+    x: {
+      strategyId: string;
+      t: MasterTradeInput;
+      signed: number;
+      closing: boolean;
+      fullExit: boolean;
+      price: number | null;
+      lotSize: number;
+      masterQty: number;
+      t0: number;
+      entryBlock: string | null;
+    },
   ): Promise<CopyResult> {
     const base = { followerId: c.followerId, userId: c.userId, accountId: c.accountId, broker: c.broker, simulated: c.simulated };
     const skip = (reason: string): CopyResult => ({ ...base, qty: 0, status: 'REJECTED', errorCode: 'SKIPPED', errorMessage: reason, attempts: 0 });
@@ -240,6 +274,7 @@ export class CopyEngineService {
         qty = Math.min(calc || Math.abs(net), Math.abs(net));
       }
     } else {
+      if (x.entryBlock) return skip(x.entryBlock);
       if (s.allowedSegments.length && !s.allowedSegments.includes(segmentOf(t.exchange))) return skip(`Segment ${segmentOf(t.exchange)} not allowed`);
       const day = registry.day(c.followerId);
       if (day.breached || (s.maxDailyLoss && day.pnl !== null && day.pnl <= -s.maxDailyLoss)) return skip('Daily loss limit reached');
@@ -302,6 +337,7 @@ export class CopyEngineService {
     t: MasterTradeInput,
     lotSize: number,
     results: CopyResult[],
+    isExit = false,
   ): Promise<void> {
     try {
       await this.prisma.masterTrade.create({
@@ -367,6 +403,8 @@ export class CopyEngineService {
           submittedAt: OK_STATUSES.includes(r.status) ? now : null,
           filledAt: r.status === 'FILLED' ? now : null,
           isPaper: r.simulated,
+          isExit,
+          triggerPrice: t.triggerPrice ?? undefined,
         })),
       });
     }

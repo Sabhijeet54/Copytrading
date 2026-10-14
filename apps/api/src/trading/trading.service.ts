@@ -75,6 +75,9 @@ export class TradingService {
   async handleBrokerError(account: BrokerAccount, err: unknown): Promise<string> {
     const msg = err instanceof Error ? err.message : 'Broker error';
     if (this.isSessionError(err)) {
+      // Angel One: recover with the refresh token before giving up on the session.
+      const full = account.status ? account : await this.prisma.brokerAccount.findUnique({ where: { id: account.id } });
+      if (full && (await this.sessions.renewAngelSession(full))) return `${msg} (session renewed — retrying)`;
       await this.sessions.markExpired(account, `Broker rejected the session: ${msg}`).catch(() => undefined);
     }
     return msg;

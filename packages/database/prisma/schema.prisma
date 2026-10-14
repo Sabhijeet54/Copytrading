@@ -467,6 +467,11 @@ model CopyOrder {
   submittedAt        DateTime?
   filledAt           DateTime?
   isPaper            Boolean     @default(false)
+  /// Pending SL / target order mirrored from a pending master exit order (counts in net position only when it fills).
+  mirrored           Boolean     @default(false)
+  /// Reduces an existing copy position (never auto-cancelled as a stale entry).
+  isExit             Boolean     @default(false)
+  triggerPrice       Decimal?    @db.Decimal(18, 4)
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
 

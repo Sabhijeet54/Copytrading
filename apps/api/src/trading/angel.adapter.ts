@@ -10,6 +10,7 @@ import {
   BrokerOrder,
   BrokerPosition,
   canonicalSymbol,
+  ModifyOrderInput,
   num,
   PlaceOrderInput,
   toExchange,
@@ -50,6 +51,8 @@ const ANGEL_RATE_PER_SEC: Record<string, number> = {
   '/rest/secure/angelbroking/user/v1/getProfile': 3,
   '/rest/secure/angelbroking/order/v1/getLtpData': 10,
   '/rest/secure/angelbroking/order/v1/searchScrip': 1,
+  '/rest/secure/angelbroking/order/v1/modifyOrder': 10,
+  '/rest/secure/angelbroking/order/v1/cancelOrder': 10,
 };
 
 export interface AngelHeaders {
@@ -192,6 +195,31 @@ export class AngelOneAdapter implements BrokerAdapter {
     return { brokerOrderId: d.orderid };
   }
 
+  async modifyOrder(o: ModifyOrderInput): Promise<void> {
+    assertCanTrade(this.opts);
+    const inst = await this.resolve(o.exchange, o.symbol);
+    await this.call('/rest/secure/angelbroking/order/v1/modifyOrder', 'POST', {
+      variety: o.orderType === 'SL' || o.orderType === 'SL_M' ? 'STOPLOSS' : 'NORMAL',
+      orderid: o.brokerOrderId,
+      tradingsymbol: inst.symbol,
+      symboltoken: inst.token,
+      exchange: o.exchange,
+      ordertype: TYPE_OUT[o.orderType],
+      producttype: PRODUCT_OUT[o.productType],
+      duration: 'DAY',
+      price: o.price != null && o.orderType !== 'MARKET' ? String(o.price) : '0',
+      triggerprice: o.triggerPrice != null ? String(o.triggerPrice) : '0',
+      quantity: String(o.quantity),
+    });
+  }
+
+  async cancelOrder(brokerOrderId: string, orderType: OrderType): Promise<void> {
+    await this.call('/rest/secure/angelbroking/order/v1/cancelOrder', 'POST', {
+      variety: orderType === 'SL' || orderType === 'SL_M' ? 'STOPLOSS' : 'NORMAL',
+      orderid: brokerOrderId,
+    });
+  }
+
   async orders(): Promise<BrokerOrder[]> {
     const rows = (await this.call<Record<string, unknown>[]>('/rest/secure/angelbroking/order/v1/getOrderBook', 'GET')) ?? [];
     return rows.map((r) => ({
@@ -208,6 +236,8 @@ export class AngelOneAdapter implements BrokerAdapter {
       averagePrice: num(r.averageprice),
       status: status(String(r.status ?? r.orderstatus)),
       statusMessage: r.text ? String(r.text) : undefined,
+      tag: r.ordertag ? String(r.ordertag) : undefined,
+      triggerPrice: num(r.triggerprice),
       lotSize: num(r.lotsize) ?? undefined,
       timestamp: angelTime(r.exchtime || r.updatetime),
       raw: r,

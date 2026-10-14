@@ -311,23 +311,36 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
     const since = startOfTradingDayIST();
     const [orders, masters] = await Promise.all([
       this.prisma.copyOrder.findMany({
-        where: { createdAt: { gte: since }, status: { in: ['SUBMITTED', 'OPEN', 'PARTIALLY_FILLED', 'FILLED'] } },
-        select: { strategyFollowerId: true, exchange: true, symbol: true, productType: true, side: true, quantity: true },
+        where: {
+          createdAt: { gte: since },
+          OR: [{ status: { in: ['SUBMITTED', 'OPEN', 'PARTIALLY_FILLED', 'FILLED'] } }, { status: { in: ['CANCELLED', 'REJECTED'] }, filledQuantity: { gt: 0 } }],
+        },
+        select: { strategyFollowerId: true, exchange: true, symbol: true, productType: true, side: true, quantity: true, filledQuantity: true, status: true, mirrored: true },
       }),
       this.prisma.masterTrade.findMany({
-        where: { createdAt: { gte: since }, strategyId: { not: null }, status: { in: ['SUBMITTED', 'OPEN', 'PARTIALLY_FILLED', 'FILLED'] } },
-        select: { strategyId: true, exchange: true, symbol: true, productType: true, side: true, quantity: true, filledQuantity: true },
+        where: {
+          createdAt: { gte: since },
+          strategyId: { not: null },
+          OR: [{ status: { in: ['SUBMITTED', 'OPEN', 'PARTIALLY_FILLED', 'FILLED'] } }, { status: { in: ['CANCELLED', 'REJECTED'] }, filledQuantity: { gt: 0 } }],
+        },
+        select: { strategyId: true, exchange: true, symbol: true, productType: true, side: true, quantity: true, filledQuantity: true, status: true },
       }),
     ]);
     this.netPos.clear();
     this.masterNet.clear();
     this.days.clear();
     for (const o of orders) {
-      this.day(o.strategyFollowerId).trades++;
-      this.applyClientFill(o.strategyFollowerId, o.exchange, o.symbol, o.productType, o.side === 'BUY' ? o.quantity : -o.quantity);
+      if (!o.mirrored) this.day(o.strategyFollowerId).trades++;
+      // Mirrored SL/target orders count only when filled; a normal order still pending counts in full.
+      const pendingNormal = !o.mirrored && (o.status === 'SUBMITTED' || o.status === 'OPEN' || o.status === 'PARTIALLY_FILLED');
+      const q = pendingNormal ? o.quantity : o.filledQuantity;
+      if (!q) continue;
+      this.applyClientFill(o.strategyFollowerId, o.exchange, o.symbol, o.productType, o.side === 'BUY' ? q : -q);
     }
     for (const m of masters) {
-      const q = m.filledQuantity > 0 ? m.filledQuantity : m.quantity;
+      // Platform-placed master orders not yet confirmed count in full; everything else counts what filled.
+      const q = m.status === 'SUBMITTED' ? m.quantity : m.filledQuantity;
+      if (!q) continue;
       this.applyMasterFill(m.strategyId!, m.exchange, m.symbol, m.productType, m.side === 'BUY' ? q : -q);
     }
     this.seededDay = istDay();

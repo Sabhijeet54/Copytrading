@@ -5,9 +5,11 @@ import { PRISMA } from '../common/prisma/prisma.service';
 import { REDIS } from '../common/redis/redis.module';
 import { API_CONFIG, ApiConfig } from '../config/config.module';
 import { CopyEngineService } from './copy-engine.service';
+import { OrderMirrorService, seenKey } from './order-mirror.service';
 import { TradingService } from './trading.service';
 
-const seenKey = (accountId: string) => `ctp:poll:seen:${accountId}`;
+/** Hash: master broker order id → quantity already copied (partial-fill tracking). */
+const copiedKey = (accountId: string) => `ctp:poll:copied:${accountId}`;
 const TERMINAL = new Set(['FILLED', 'REJECTED', 'CANCELLED']);
 
 /**
@@ -30,6 +32,7 @@ export class MasterPollerService implements OnApplicationBootstrap, OnModuleDest
     @Inject(API_CONFIG) private readonly config: ApiConfig,
     private readonly trading: TradingService,
     private readonly engine: CopyEngineService,
+    private readonly mirror: OrderMirrorService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -90,25 +93,44 @@ export class MasterPollerService implements OnApplicationBootstrap, OnModuleDest
       await this.redis.expire(key, 3 * 86400);
       return;
     }
+    // Pending master SL/target orders are mirrored to followers; their fills are never copied again.
+    const owned = await this.mirror.sync(strategy, account, orders);
+    const partial = this.config.COPY_PARTIAL_FILLS;
     for (const o of orders) {
-      if (!TERMINAL.has(o.status)) continue;
+      if (owned.has(o.brokerOrderId)) continue;
+      const terminal = TERMINAL.has(o.status);
+      // Wait for the order to finish unless partial fills are copied live.
+      if (!terminal && !(partial && o.filledQuantity > 0)) continue;
       if (await this.redis.sismember(key, o.brokerOrderId)) continue;
-      await this.markSeen(account.id, o.brokerOrderId);
-      if (o.status !== 'FILLED' || o.filledQuantity <= 0) continue;
-      if (o.statusMessage?.includes('ctpcopy')) continue;
-      this.logger.log(`Master trade detected on ${account.broker}: ${o.side} ${o.filledQuantity} ${o.exchange}:${o.symbol}`);
+      if (o.statusMessage?.includes('ctpcopy')) {
+        await this.markSeen(account.id, o.brokerOrderId);
+        continue;
+      }
+      // Only quantity that actually executed is copied — a cancelled/rejected order may still be partly filled.
+      const copied = Number((await this.redis.hget(copiedKey(account.id), o.brokerOrderId)) ?? 0);
+      const delta = o.filledQuantity - copied;
+      if (terminal) await this.markSeen(account.id, o.brokerOrderId);
+      if (delta <= 0) continue;
+      await this.redis.hset(copiedKey(account.id), o.brokerOrderId, String(o.filledQuantity));
+      await this.redis.expire(copiedKey(account.id), 3 * 86400);
+      const isFirstSlice = copied === 0 && o.filledQuantity === o.quantity;
+      // Each fill slice gets its own id so the engine's idempotency lock treats it as a separate event.
+      const sliceId = isFirstSlice ? o.brokerOrderId : `${o.brokerOrderId}#${o.filledQuantity}`;
+      this.logger.log(
+        `Master fill on ${account.broker}: ${o.side} ${delta} ${o.exchange}:${o.symbol} (${o.filledQuantity}/${o.quantity}, ${o.status})`,
+      );
       await this.engine.onMasterTrade(strategy, account, {
-        brokerOrderId: o.brokerOrderId,
+        brokerOrderId: sliceId,
         exchange: o.exchange,
         symbol: o.symbol,
         side: o.side,
-        quantity: o.quantity,
-        filledQuantity: o.filledQuantity,
+        quantity: delta,
+        filledQuantity: delta,
         orderType: o.orderType,
         productType: o.productType,
         price: o.price,
         averagePrice: o.averagePrice,
-        status: o.status,
+        status: 'FILLED',
         instrumentToken: o.instrumentToken,
         lotSize: o.lotSize,
         timestamp: o.timestamp,
