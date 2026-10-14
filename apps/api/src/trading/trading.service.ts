@@ -4,7 +4,7 @@ import { PRISMA } from '../common/prisma/prisma.service';
 import { API_CONFIG, ApiConfig } from '../config/config.module';
 import { BrokerApiError } from '../brokers/broker-http';
 import { BrokerSessionService } from '../brokers/broker-session.service';
-import { ADAPTERS } from './adapter-factory';
+import { type AccountOverrides, ADAPTERS, overridesFrom } from './adapter-factory';
 import { OrderBlockedError, type BrokerAdapter, type BrokerFunds, type BrokerHolding, type BrokerOrder, type BrokerPosition } from './broker-adapter';
 
 export interface LiveAccountData {
@@ -40,10 +40,10 @@ export class TradingService {
   }
 
   /** Builds an adapter from an already-decrypted token (no DB access). */
-  buildAdapter(account: Pick<BrokerAccount, 'broker' | 'mode'>, token: string): BrokerAdapter {
+  buildAdapter(account: Pick<BrokerAccount, 'broker' | 'mode'>, token: string, overrides?: AccountOverrides): BrokerAdapter {
     const f = ADAPTERS[account.broker];
     if (!f) throw new BrokerApiError(`${account.broker} has no live broker adapter.`);
-    return f.create(this.config, token, account);
+    return f.create(this.config, token, account, overrides);
   }
 
   /** Throws when the account cannot be used for a real broker call (not connected / token expired). */
@@ -56,7 +56,7 @@ export class TradingService {
     }
     const token = await this.sessions.decryptAccess(account);
     if (!token) throw new BrokerApiError('No broker session stored. Please log in again.');
-    return this.buildAdapter(account, token);
+    return this.buildAdapter(account, token, overridesFrom(await this.sessions.decryptExtra(account)));
   }
 
   /** True when a broker error means the session is no longer valid. */

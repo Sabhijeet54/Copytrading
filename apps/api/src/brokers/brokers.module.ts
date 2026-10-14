@@ -1,7 +1,7 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Inject, Module, Param, Post, Query, Req, Res } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Inject, Module, NotFoundException, Param, Post, Put, Query, Req, Res } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { IsString, Matches } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { IsBoolean, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
 import type { Request, Response } from 'express';
 import type { BrokerName, PrismaClient } from '@ctp/database';
 import type { BrokerAccountView } from '@ctp/types';
@@ -11,6 +11,7 @@ import { toBrokerAccountView } from '../common/mappers';
 import { PRISMA } from '../common/prisma/prisma.service';
 import { API_CONFIG, ApiConfig } from '../config/config.module';
 import { BrokerApiError } from './broker-http';
+import { BrokerApiConfigService } from './broker-api-config.service';
 import { BrokerSessionService } from './broker-session.service';
 import { TokenExpiryService } from './token-expiry.service';
 
@@ -33,6 +34,34 @@ export class AngelOneLoginDto {
   totp!: string;
 }
 
+const opt = (max: number) => [IsOptional(), Transform(trim), IsString(), MaxLength(max)];
+const apply = (decorators: PropertyDecorator[]): PropertyDecorator => (target, key) => decorators.forEach((d) => d(target, key));
+
+/** Client's own broker API app + static-IP proxy. Empty secret fields keep the stored value. */
+export class SaveBrokerApiConfigDto {
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
+  @Matches(/^[A-Z0-9]{0,20}$/, { message: 'Enter a valid client code / user id' })
+  clientCode?: string;
+  @apply(opt(200)) apiKey?: string;
+  @apply(opt(200)) apiSecret?: string;
+  @IsOptional() @Transform(trim) @Matches(/^(\d{4,6})?$/, { message: 'PIN must be 4–6 digits' }) pin?: string;
+  @apply(opt(500)) totpSecret?: string;
+  @apply(opt(253)) proxyHost?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(65535) proxyPort?: number;
+  @apply(opt(200)) proxyUser?: string;
+  @apply(opt(200)) proxyPass?: string;
+  @IsOptional() @IsBoolean() autoLogin?: boolean;
+  @IsOptional() @IsBoolean() consent?: boolean;
+}
+
+const BROKER_SLUG: Record<string, BrokerName> = { 'angel-one': 'ANGEL_ONE', zerodha: 'ZERODHA' };
+function brokerFromSlug(slug: string): BrokerName {
+  const b = BROKER_SLUG[slug];
+  if (!b) throw new NotFoundException('Unknown broker');
+  return b;
+}
+
 /**
  * Broker connection flows.
  *   Zerodha   : GET /brokers/zerodha/connect → Kite login → GET /brokers/zerodha/callback
@@ -46,7 +75,37 @@ export class BrokersController {
     @Inject(PRISMA) private readonly prisma: PrismaClient,
     @Inject(API_CONFIG) private readonly config: ApiConfig,
     private readonly sessions: BrokerSessionService,
+    private readonly apiConfigs: BrokerApiConfigService,
   ) {}
+
+  // ------------------------------------------------- client's own API app + static IP
+
+  @Get('api-config/:broker')
+  getApiConfig(@CurrentUser() user: RequestUser, @Param('broker') broker: string) {
+    return this.apiConfigs.get(user.id, brokerFromSlug(broker));
+  }
+
+  @Put('api-config/:broker')
+  saveApiConfig(@CurrentUser() user: RequestUser, @Param('broker') broker: string, @Body() dto: SaveBrokerApiConfigDto) {
+    return this.apiConfigs.save(user.id, brokerFromSlug(broker), dto);
+  }
+
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('api-config/:broker/test')
+  testApiConfig(@CurrentUser() user: RequestUser, @Param('broker') broker: string) {
+    return this.apiConfigs.test(user.id, brokerFromSlug(broker));
+  }
+
+  /** Angel One: connects right away (PIN + TOTP). Zerodha: returns the Kite login URL of the client's own app. */
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('api-config/:broker/connect')
+  async connectApiConfig(@CurrentUser() user: RequestUser, @Param('broker') broker: string, @Req() req: Request) {
+    const b = brokerFromSlug(broker);
+    if (b === 'ZERODHA') return this.apiConfigs.zerodhaLoginUrl(user.id);
+    return { account: toBrokerAccountView(await this.apiConfigs.connectAngel(user.id, clientInfo(req))) };
+  }
 
   @Get('accounts')
   async myAccounts(@CurrentUser() user: RequestUser): Promise<BrokerAccountView[]> {
@@ -86,7 +145,9 @@ export class BrokersController {
   ): Promise<void> {
     await this.handleCallback('ZERODHA', state, res, async (userId) => {
       if (status !== 'success' || !requestToken) throw new BrokerApiError('Zerodha login was cancelled or failed.');
-      const s = await this.sessions.zerodha().createSession(requestToken);
+      // The client's own Kite app (key/secret/static-IP proxy) when they configured one, else the server's app.
+      const own = await this.apiConfigs.zerodhaClientFor(userId);
+      const s = await (own?.client ?? this.sessions.zerodha()).createSession(requestToken);
       return this.sessions.saveSession(
         userId,
         'ZERODHA',
@@ -94,7 +155,7 @@ export class BrokersController {
           brokerClientId: s.userId,
           accessToken: s.accessToken,
           refreshToken: s.refreshToken,
-          extra: { publicToken: s.publicToken },
+          extra: { publicToken: s.publicToken, ...(own?.extra ?? {}) },
           expiresAt: s.expiresAt,
         },
         clientInfo(req),
@@ -184,5 +245,9 @@ export class BrokersController {
   }
 }
 
-@Module({ controllers: [BrokersController], providers: [BrokerSessionService, TokenExpiryService], exports: [BrokerSessionService] })
+@Module({
+  controllers: [BrokersController],
+  providers: [BrokerSessionService, BrokerApiConfigService, TokenExpiryService],
+  exports: [BrokerSessionService, BrokerApiConfigService],
+})
 export class BrokersModule {}

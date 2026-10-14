@@ -147,6 +147,14 @@ export const apiEnvSchema = baseSchema
     COPY_RETRY_WINDOW_SEC: intFromString(30, 5),
     /** true: clients without any licence are not copied. An expired licence always stops copying. */
     LICENCE_REQUIRED: booleanFlag(false),
+    /** true: a live client account without its own static-IP proxy is never sent orders (shown as skipped). */
+    REQUIRE_CLIENT_PROXY: booleanFlag(false),
+    /** IST HH:MM to auto-login Angel One clients that saved PIN + TOTP (weekdays). Empty = disabled. */
+    ANGEL_AUTO_LOGIN_TIME: z
+      .string()
+      .optional()
+      .transform((v) => (v === undefined ? '08:45' : v.trim()))
+      .refine((v) => v === '' || /^([01]\d|2[0-3]):[0-5]\d$/.test(v), 'ANGEL_AUTO_LOGIN_TIME must be HH:MM (IST) or empty'),
   })
   .superRefine((env, ctx) => {
     if (env.APP_ENV !== 'development' && !env.COOKIE_SECURE) {

@@ -93,6 +93,37 @@ export class BrokerSessionService {
     }));
   }
 
+  /** Client for an account that logged in with its own API app / static-IP proxy (falls back to the server's). */
+  angelOneFor(extra: Record<string, string | undefined>): AngelOneClient {
+    if (!extra.apiKey) return this.angelOne();
+    const c = this.config;
+    return new AngelOneClient({
+      apiKey: extra.apiKey,
+      proxyUrl: extra.proxyUrl,
+      publicIp: extra.publicIp ?? c.ANGEL_PUBLIC_IP,
+      localIp: c.ANGEL_LOCAL_IP,
+      macAddress: c.ANGEL_MAC_ADDRESS,
+    });
+  }
+
+  zerodhaFor(extra: Record<string, string | undefined>, apiSecret = ''): ZerodhaClient {
+    if (!extra.apiKey) return this.zerodha();
+    return new ZerodhaClient({ apiKey: extra.apiKey, apiSecret, proxyUrl: extra.proxyUrl });
+  }
+
+  /** Encrypt / decrypt arbitrary JSON bound to a row id (used for the client's broker API secrets). */
+  sealJson(value: unknown, aad: string): string {
+    return this.box.encrypt(JSON.stringify(value), aad);
+  }
+  openJson<T>(ciphertext: string | null | undefined, aad: string): T | null {
+    if (!ciphertext) return null;
+    try {
+      return JSON.parse(this.box.decrypt(ciphertext, aad)) as T;
+    } catch {
+      return null;
+    }
+  }
+
   // --------------------------------------------------------------- state
 
   async createState(userId: string, broker: BrokerName): Promise<string> {
@@ -279,9 +310,9 @@ export class BrokerSessionService {
       if (!cred?.encryptedRefreshToken) return false;
       const jwt = this.box.decrypt(cred.encryptedAccessToken, account.id);
       const refresh = this.box.decrypt(cred.encryptedRefreshToken, account.id);
-      const s = await this.angelOne().renewSession(jwt, refresh);
-      if (account.brokerClientId && s.clientCode !== account.brokerClientId) return false;
       const extra = await this.decryptExtra(account);
+      const s = await this.angelOneFor(extra).renewSession(jwt, refresh);
+      if (account.brokerClientId && s.clientCode !== account.brokerClientId) return false;
       if (s.feedToken) extra.feedToken = s.feedToken;
       await this.prisma.brokerCredential.update({
         where: { brokerAccountId: account.id },
@@ -328,8 +359,9 @@ export class BrokerSessionService {
   async disconnectAccount(account: BrokerAccount, opts: DisconnectOptions, client?: ClientInfo): Promise<BrokerAccount> {
     try {
       const token = await this.decryptAccess(account);
-      if (token && account.broker === 'ZERODHA') await this.zerodha().logout(token);
-      if (token && account.broker === 'ANGEL_ONE' && account.brokerClientId) await this.angelOne().logout(account.brokerClientId, token);
+      const extra = await this.decryptExtra(account);
+      if (token && account.broker === 'ZERODHA') await this.zerodhaFor(extra).logout(token);
+      if (token && account.broker === 'ANGEL_ONE' && account.brokerClientId) await this.angelOneFor(extra).logout(account.brokerClientId, token);
     } catch (err) {
       this.logger.warn(`Broker logout failed for account ${account.id}: ${(err as Error).message}`);
     }

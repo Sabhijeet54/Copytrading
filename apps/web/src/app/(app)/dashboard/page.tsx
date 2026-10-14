@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Suspense } from 'react';
 import { BrokerAccountCard } from '@/components/broker-account-card';
 import { BrokerCallbackNotice, BrokerConnectButtons } from '@/components/broker-connect';
+import { ClientDashboard } from '@/components/client-dashboard';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
@@ -47,6 +48,8 @@ export default function DashboardPage() {
         }
       />
 
+      {user.role === 'FOLLOWER' ? <ClientDashboard /> : null}
+
       <div className="grid gap-4 lg:grid-cols-2">
         <Card id="broker" className="scroll-mt-20">
           <CardHeader>
@@ -76,7 +79,19 @@ export default function DashboardPage() {
               </div>
             )}
             <div className="mt-4">
-              <p className="mb-2 text-xs text-muted-foreground">Broker sessions expire daily — log in again each trading day.</p>
+              <p className="mb-2 text-xs text-muted-foreground">
+                Broker sessions expire daily — log in again each trading day.
+                {user.role === 'FOLLOWER' ? (
+                  <>
+                    {' '}
+                    For live trading set up your own API app and static IP in{' '}
+                    <Link href="/broker-api" className="font-medium text-primary hover:underline">
+                      Broker API
+                    </Link>
+                    .
+                  </>
+                ) : null}
+              </p>
               <BrokerConnectButtons angelClientCode={angel?.brokerClientId ?? undefined} isMaster={user.role === 'MASTER'} />
             </div>
           </CardContent>

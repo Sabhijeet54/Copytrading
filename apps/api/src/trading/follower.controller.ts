@@ -10,7 +10,8 @@ import { PRISMA } from '../common/prisma/prisma.service';
 import { ExitPositionDto, FollowDto } from './trading.dto';
 import { BrokerApiError } from '../brokers/broker-http';
 import { MarketFeedService } from '../market-data/market-feed.service';
-import { PriceCacheService } from '../market-data/price-cache.service';
+import { instrumentKey, PriceCacheService } from '../market-data/price-cache.service';
+import { startOfTradingDayIST } from '../admin/admin.service';
 import { overlayLivePrices, paperPositionView } from './price-overlay';
 import { TradingService } from './trading.service';
 import { RiskService } from './risk.service';
@@ -29,6 +30,92 @@ export class FollowerController {
     private readonly prices: PriceCacheService,
     private readonly feed: MarketFeedService,
   ) {}
+
+  /**
+   * Client dashboard: today's P&L (overall and per strategy), connected broker, subscriptions and licence.
+   * P&L is computed from today's executed copy orders (sells − buys) plus the open quantity at the live LTP.
+   */
+  @Get('dashboard')
+  async dashboard(@CurrentUser() user: RequestUser) {
+    const since = startOfTradingDayIST();
+    const [me, accounts, subs, orders] = await Promise.all([
+      this.prisma.user.findUnique({ where: { id: user.id }, select: { licenceExpiresAt: true, licenceDays: true } }),
+      this.prisma.brokerAccount.findMany({ where: { userId: user.id, broker: { not: 'MOCK' } }, orderBy: { updatedAt: 'desc' } }),
+      this.prisma.strategyFollower.findMany({ where: { followerUserId: user.id }, include: { strategy: { select: { name: true, status: true } } } }),
+      this.prisma.copyOrder.findMany({
+        where: { followerUserId: user.id, createdAt: { gte: since }, filledQuantity: { gt: 0 } },
+        select: { strategyFollowerId: true, exchange: true, symbol: true, side: true, filledQuantity: true, averagePrice: true },
+      }),
+    ]);
+    // Per strategy & instrument: cash flow and net quantity.
+    const book = new Map<string, Map<string, { cash: number; net: number; last: number }>>();
+    for (const o of orders) {
+      const px = o.averagePrice == null ? 0 : Number(o.averagePrice);
+      const sign = o.side === 'BUY' ? 1 : -1;
+      const inst = `${o.exchange}:${o.symbol}`;
+      const m = book.get(o.strategyFollowerId) ?? new Map();
+      const cur = m.get(inst) ?? { cash: 0, net: 0, last: px };
+      cur.cash -= sign * o.filledQuantity * px;
+      cur.net += sign * o.filledQuantity;
+      cur.last = px || cur.last;
+      m.set(inst, cur);
+      book.set(o.strategyFollowerId, m);
+    }
+    const pnlOf = (followerId: string) => {
+      let pnl = 0;
+      for (const [inst, v] of book.get(followerId) ?? []) {
+        const [ex, sym] = inst.split(':') as [string, string];
+        if (v.net) this.feed.ensure(ex as never, sym);
+        const ltp = this.prices.get(instrumentKey(ex, sym)) ?? v.last;
+        pnl += v.cash + v.net * ltp;
+      }
+      return Math.round(pnl * 100) / 100;
+    };
+    const strategies = subs.map((s) => ({
+      followerId: s.id,
+      strategyId: s.strategyId,
+      name: s.strategy.name,
+      strategyStatus: s.strategy.status,
+      copyStatus: s.copyStatus,
+      allocation:
+        s.allocationMode === 'FIXED_QUANTITY'
+          ? s.fixedLots
+            ? `${s.fixedLots} lot${s.fixedLots > 1 ? 's' : ''}`
+            : `${s.fixedQuantity ?? 0} qty`
+          : s.allocationMode === 'CAPITAL_PERCENTAGE'
+            ? `${Number(s.allocationPercent ?? 0)}%`
+            : `₹${Number(s.allocationAmount ?? 0).toLocaleString('en-IN')}`,
+      todayPnl: pnlOf(s.id),
+    }));
+    const now = Date.now();
+    const exp = me?.licenceExpiresAt?.getTime() ?? null;
+    const primary = accounts.find((a) => a.status === 'CONNECTED') ?? accounts[0] ?? null;
+    return {
+      todayPnl: Math.round(strategies.reduce((s, x) => s + x.todayPnl, 0) * 100) / 100,
+      broker: primary
+        ? {
+            broker: primary.broker,
+            brokerClientId: primary.brokerClientId,
+            status: primary.status,
+            connected: primary.status === 'CONNECTED' && (!primary.tokenExpiresAt || primary.tokenExpiresAt.getTime() > now),
+            tradingMode: this.trading.isSimulated(primary) ? 'PAPER' : 'LIVE',
+          }
+        : null,
+      subscriptions: {
+        total: subs.length,
+        on: subs.filter((s) => s.copyStatus === 'ON').length,
+        off: subs.filter((s) => s.copyStatus === 'OFF').length,
+        paused: subs.filter((s) => s.copyStatus === 'PAUSED').length,
+      },
+      licence: {
+        expiresAt: me?.licenceExpiresAt?.toISOString() ?? null,
+        days: me?.licenceDays ?? null,
+        remainingDays: exp == null ? null : Math.max(0, Math.ceil((exp - now) / 86_400_000)),
+        active: exp == null ? null : exp > now,
+      },
+      strategies,
+    };
+  }
 
   @Get('strategies')
   async strategies(@CurrentUser() user: RequestUser) {

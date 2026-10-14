@@ -7,7 +7,7 @@ import { BrokerSessionService } from '../brokers/broker-session.service';
 import { PRISMA } from '../common/prisma/prisma.service';
 import { API_CONFIG, ApiConfig } from '../config/config.module';
 import { AccountEvents } from '../realtime/account-events';
-import { ADAPTERS } from './adapter-factory';
+import { ADAPTERS, overridesFrom } from './adapter-factory';
 import type { BrokerAdapter } from './broker-adapter';
 import type { QtySettings, QtyStrategy } from './copy-quantity';
 import { TradingService } from './trading.service';
@@ -326,7 +326,14 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
   private async buildAdapter(a: BrokerAccount): Promise<BrokerAdapter | null> {
     try {
       const token = await this.sessions.decryptAccess(a);
-      return token ? this.trading.buildAdapter(a, token) : null;
+      if (!token) return null;
+      const o = overridesFrom(await this.sessions.decryptExtra(a));
+      // Live orders must leave from the client's registered static IP when the server requires it.
+      if (this.config.REQUIRE_CLIENT_PROXY && !this.trading.isSimulated(a) && !o.proxyUrl) {
+        this.logger.warn(`Account ${a.id} has no static-IP proxy — skipped (REQUIRE_CLIENT_PROXY)`);
+        return null;
+      }
+      return this.trading.buildAdapter(a, token, o);
     } catch (err) {
       this.logger.warn(`Adapter for ${a.id} failed: ${(err as Error).message}`);
       return null;

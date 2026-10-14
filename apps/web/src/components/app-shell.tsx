@@ -10,6 +10,7 @@ import {
   ChevronsRight,
   ClipboardList,
   Copy,
+  KeyRound,
   Layers,
   LayoutDashboard,
   ListOrdered,
@@ -81,6 +82,7 @@ const MENUS: Record<Role, NavSection[]> = {
     {
       title: 'Configuration',
       items: [
+        { href: '/broker-api', label: 'Broker API', icon: KeyRound },
         { href: '/dashboard#broker', label: 'Broker connection', icon: Wallet },
         { href: '/settings', label: 'Account settings', icon: Settings },
       ],

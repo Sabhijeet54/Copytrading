@@ -203,6 +203,7 @@ model User {
   sessions           Session[]
   verificationTokens EmailVerificationToken[]
   brokerAccounts     BrokerAccount[]
+  brokerApiConfigs   BrokerApiConfig[]
   strategies         Strategy[]               @relation("StrategyMaster")
   follows            StrategyFollower[]       @relation("FollowerUser")
   masterTrades       MasterTrade[]
@@ -641,4 +642,33 @@ model SystemEvent {
 
   @@index([severity, createdAt])
   @@index([createdAt])
+}
+
+/// Client's own broker API app + static-IP proxy (SEBI/broker rule: orders must come from the client's registered IP).
+/// Every secret lives in `encryptedSecrets` (AES-256-GCM JSON, AAD = row id) and is never returned by the API.
+model BrokerApiConfig {
+  id               String     @id @default(cuid())
+  userId           String
+  broker           BrokerName
+  /// Angel One client code / Zerodha user id (shown masked in the UI).
+  clientCode       String?
+  proxyHost        String?
+  proxyPort        Int?
+  /// JSON { apiKey, apiSecret, pin, totpSecret, proxyUser, proxyPass } — encrypted.
+  encryptedSecrets String?
+  /// Angel One: log in automatically every trading morning with PIN + TOTP.
+  autoLogin        Boolean    @default(true)
+  consentAt        DateTime?
+  lastTestAt       DateTime?
+  lastTestOk       Boolean?
+  lastTestIp       String?
+  lastTestError    String?
+  lastLoginAt      DateTime?
+  lastLoginError   String?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, broker])
 }
