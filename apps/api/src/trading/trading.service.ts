@@ -61,8 +61,14 @@ export class TradingService {
 
   /** True when a broker error means the session is no longer valid. */
   isSessionError(err: unknown): boolean {
-    const msg = err instanceof Error ? err.message : '';
-    return err instanceof BrokerApiError && (err.status === 403 || err.brokerCode === 'TokenException' || /token|session|AG8001|invalid jwt/i.test(msg));
+    if (!(err instanceof BrokerApiError)) return false;
+    const msg = err.message;
+    // Angel One returns HTTP 403 for rate limits ("exceeding access rate") and static-IP / WAF blocks too —
+    // those are transient and must NOT disconnect the account. Only explicit session error codes count.
+    if (err.brokerCode === 'RATE_LIMIT' || /access rate|rate limit|too many|static ip|not allowed from this ip/i.test(msg)) return false;
+    if (err.brokerCode && /^(AG8001|AG8002|AG8003|AB1010|AB8050|AB8051)$/i.test(err.brokerCode)) return true; // Angel
+    if (err.brokerCode === 'TokenException') return true; // Zerodha
+    return /invalid token|token expired|invalid jwt|invalid session|session expired|incorrect `api_key` or `access_token`/i.test(msg);
   }
 
   /** Marks the account EXPIRED (and notifies the owner) when the broker says the session is invalid. */

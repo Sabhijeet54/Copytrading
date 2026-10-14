@@ -1,5 +1,6 @@
 import type { Exchange, OrderStatus, OrderType, ProductType } from '@ctp/database';
 import { BrokerApiError, brokerFetch } from '../brokers/broker-http';
+import { Throttle } from '../brokers/throttle';
 import {
   AdapterOptions,
   assertCanTrade,
@@ -37,6 +38,20 @@ function angelTime(s: unknown): Date {
   return Number.isNaN(d.getTime()) ? new Date() : d;
 }
 
+/**
+ * SmartAPI per-endpoint rate limits (requests/second, per client) from Angel One's published limits table:
+ * https://smartapi.angelone.in/smartapi/forum/post/16438 — breaching them returns a plain-text HTTP 403.
+ */
+const ANGEL_RATE_PER_SEC: Record<string, number> = {
+  '/rest/secure/angelbroking/order/v1/getOrderBook': 1,
+  '/rest/secure/angelbroking/order/v1/getPosition': 1,
+  '/rest/secure/angelbroking/portfolio/v1/getHolding': 1,
+  '/rest/secure/angelbroking/user/v1/getRMS': 2,
+  '/rest/secure/angelbroking/user/v1/getProfile': 3,
+  '/rest/secure/angelbroking/order/v1/getLtpData': 10,
+  '/rest/secure/angelbroking/order/v1/searchScrip': 1,
+};
+
 export interface AngelHeaders {
   apiKey: string;
   publicIp?: string;
@@ -63,7 +78,43 @@ export class AngelOneAdapter implements BrokerAdapter {
     return AngelOneAdapter.tokenCache.get(`${exchange}:${symbol.toUpperCase()}`);
   }
 
+  /** One throttle per (session, endpoint), shared by every adapter instance built for the same session. */
+  private static throttles = new Map<string, Throttle>();
+  /** Concurrent identical GETs (e.g. master poller + UI refresh) share one request. */
+  private static inflightGet = new Map<string, Promise<unknown>>();
+
   private async call<T>(path: string, method: 'GET' | 'POST', payload?: object): Promise<T | null> {
+    const key = `${this.jwt.slice(-24)}|${path}`;
+    if (method === 'GET') {
+      const shared = AngelOneAdapter.inflightGet.get(key);
+      if (shared) return shared as Promise<T | null>;
+      const p = this.callThrottled<T>(key, path, method, payload).finally(() => AngelOneAdapter.inflightGet.delete(key));
+      AngelOneAdapter.inflightGet.set(key, p);
+      return p;
+    }
+    return this.callThrottled<T>(key, path, method, payload);
+  }
+
+  private async callThrottled<T>(key: string, path: string, method: 'GET' | 'POST', payload?: object): Promise<T | null> {
+    const rate = ANGEL_RATE_PER_SEC[path];
+    if (rate) {
+      let t = AngelOneAdapter.throttles.get(key);
+      if (!t) AngelOneAdapter.throttles.set(key, (t = new Throttle(rate)));
+      await t.take();
+    }
+    try {
+      return await this.rawCall<T>(path, method, payload);
+    } catch (err) {
+      // Read-only calls: one retry after the 1 s window when Angel still says we exceeded the rate.
+      if (method === 'GET' && err instanceof BrokerApiError && err.brokerCode === 'RATE_LIMIT') {
+        await new Promise((r) => setTimeout(r, 1100));
+        return this.rawCall<T>(path, method, payload);
+      }
+      throw err;
+    }
+  }
+
+  private async rawCall<T>(path: string, method: 'GET' | 'POST', payload?: object): Promise<T | null> {
     const { status: http, body } = await brokerFetch<{ status: boolean; message?: string; errorcode?: string; data?: T | null }>(
       `${API_ROOT}${path}`,
       {

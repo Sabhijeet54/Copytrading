@@ -91,7 +91,12 @@ export async function brokerFetch<T = unknown>(url: string, req: BrokerRequest =
   try {
     body = text ? JSON.parse(text) : null;
   } catch {
-    throw new BrokerApiError(`Broker returned a non-JSON response (HTTP ${res.status}).`, res.status);
+    // Angel One answers rate-limit breaches with a plain-text HTTP 403 "Access denied because of exceeding access rate".
+    if (/exceeding access rate/i.test(text)) {
+      throw new BrokerApiError('Broker rate limit hit (exceeding access rate) — retry shortly.', res.status, 'RATE_LIMIT');
+    }
+    const snippet = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+    throw new BrokerApiError(`Broker returned a non-JSON response (HTTP ${res.status})${snippet ? `: ${snippet}` : ''}.`, res.status);
   }
   return { status: res.status, body: body as T };
 }
