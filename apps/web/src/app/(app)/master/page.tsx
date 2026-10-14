@@ -168,7 +168,7 @@ function TradeForm({ strategies }: { strategies: StrategyView[] }) {
   const needsTrigger = f.orderType === 'SL' || f.orderType === 'SL_M';
 
   return (
-    <Card>
+    <Card id="place-trade" className="scroll-mt-20">
       <CardHeader>
         <CardTitle>Place trade</CardTitle>
         <CardDescription>The order goes to your broker and is copied to every client whose copying is ON.</CardDescription>
@@ -308,7 +308,7 @@ function FollowersCard({ strategy }: { strategy: StrategyView }) {
   const q = useStrategyFollowers(strategy.id);
   const [client, setClient] = useState<{ id: string; name?: string } | null>(null);
   return (
-    <Card>
+    <Card id="clients" className="scroll-mt-20">
       <CardHeader>
         <CardTitle>Clients · {strategy.name}</CardTitle>
         <CardDescription>Who follows this strategy, their broker status and allocation.</CardDescription>
@@ -434,7 +434,7 @@ function TradesCard() {
   const q = useMasterTrades();
   const [open, setOpen] = useState<string | null>(null);
   return (
-    <Card>
+    <Card id="trades" className="scroll-mt-20">
       <CardHeader>
         <CardTitle>Recent trades</CardTitle>
         <CardDescription>Trades placed here or detected in your broker app, and how they were copied.</CardDescription>
@@ -519,7 +519,7 @@ export default function MasterDeskPage() {
 
       <div className="grid gap-4">
         <MarketFeedPanel />
-        <Card>
+        <Card id="strategies" className="scroll-mt-20">
           <CardHeader>
             <CardTitle>Strategies</CardTitle>
             <CardDescription>Start a strategy to trade it; pause to stop copying to all its clients.</CardDescription>
@@ -595,7 +595,7 @@ export default function MasterDeskPage() {
 
         <TradesCard />
 
-        <h2 className="mt-2 text-lg font-semibold">My broker account</h2>
+        <h2 id="positions" className="mt-2 scroll-mt-20 text-lg font-semibold">My broker account</h2>
         {live.isLoading ? <p className="text-sm text-muted-foreground">Loading live data…</p> : null}
         {live.data && live.data.live.length === 0 ? (
           <p className="text-sm text-muted-foreground">Connect Zerodha or Angel One from the Dashboard to see live data.</p>

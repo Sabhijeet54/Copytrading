@@ -178,8 +178,8 @@ export interface LatencySnapshot {
   dbTodayCount?: number;
 }
 /** Feed status: pushed over the socket every 5 s (see RealtimeProvider), polled as a fallback. */
-export const useFeedStatus = () =>
-  useQuery({ queryKey: ['trading', 'feed-status'], queryFn: () => api<MarketFeedStatus>('/market/feed/status'), refetchInterval: 15_000 });
+export const useFeedStatus = (enabled = true) =>
+  useQuery({ queryKey: ['trading', 'feed-status'], queryFn: () => api<MarketFeedStatus>('/market/feed/status'), refetchInterval: 15_000, enabled });
 export function useFeedAction() {
   const qc = useQueryClient();
   return useMutation({

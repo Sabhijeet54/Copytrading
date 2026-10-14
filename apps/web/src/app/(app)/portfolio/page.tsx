@@ -216,7 +216,7 @@ export default function PortfolioPage() {
       ) : null}
 
       <div className="grid gap-4">
-        <Card>
+        <Card id="copy-trading" className="scroll-mt-20">
           <CardHeader>
             <CardTitle>Strategies</CardTitle>
             <CardDescription>Follow a strategy, set your allocation, then press Start to copy its trades.</CardDescription>
@@ -275,7 +275,7 @@ export default function PortfolioPage() {
           </CardContent>
         </Card>
 
-        <h2 className="mt-2 text-lg font-semibold">Running positions</h2>
+        <h2 id="positions" className="mt-2 scroll-mt-20 text-lg font-semibold">Running positions</h2>
         {portfolio.isLoading ? <p className="text-sm text-muted-foreground">Loading live data…</p> : null}
         {p && p.live.length === 0 && p.paperPositions.length === 0 ? (
           <p className="text-sm text-muted-foreground">
@@ -285,7 +285,7 @@ export default function PortfolioPage() {
         {p?.live.map((a) => <LiveAccountCard key={a.accountId} a={a} />)}
         {p && p.paperPositions.length > 0 ? <PaperPositionsCard rows={p.paperPositions} /> : null}
 
-        <Card>
+        <Card id="orders" className="scroll-mt-20">
           <CardHeader>
             <CardTitle>Copied trades</CardTitle>
             <CardDescription>Every master trade copied (or skipped) for your account.</CardDescription>

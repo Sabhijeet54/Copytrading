@@ -48,7 +48,7 @@ export default function DashboardPage() {
       />
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
+        <Card id="broker" className="scroll-mt-20">
           <CardHeader>
             <CardTitle>Trading account</CardTitle>
             <CardDescription>
