@@ -182,6 +182,11 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
     }
   }
 
+  /** Position was exited outside the copy engine (manual exit / square-off): forget the net copy position. */
+  clearPosition(followerIds: string[], exchange: string, symbol: string, product: ProductType): void {
+    for (const f of followerIds) this.netPos.delete(posKey(f, exchange, symbol, product));
+  }
+
   /** Removes a follower from copying immediately (copy OFF / loss limit). */
   evictFollower(followerId: string): void {
     for (const [sid, list] of this.byStrategy) this.byStrategy.set(sid, list.filter((e) => e.followerId !== followerId));

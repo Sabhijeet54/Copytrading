@@ -1,10 +1,13 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, Inject, NotFoundException, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { clientInfo } from '../common/client-info';
 import { CurrentUser, RequestUser, Roles } from '../common/decorators/auth.decorators';
 import { AdminService } from './admin.service';
 import { CopyEngineService } from '../trading/copy-engine.service';
 import { RiskService } from '../trading/risk.service';
+import { ClientAssignService } from '../trading/client-assign.service';
+import { AssignClientDto } from '../trading/trading.dto';
+import { toStrategyFollowerView } from '../common/mappers';
 import { PRISMA } from '../common/prisma/prisma.service';
 import type { PrismaClient } from '@ctp/database';
 import { startOfTradingDayIST } from './admin.service';
@@ -29,6 +32,7 @@ export class AdminController {
     private readonly admin: AdminService,
     private readonly risk: RiskService,
     private readonly engine: CopyEngineService,
+    private readonly assigner: ClientAssignService,
     @Inject(PRISMA) private readonly prisma: PrismaClient,
   ) {}
 
@@ -96,6 +100,15 @@ export class AdminController {
   @Get('strategies/:id/followers')
   strategyFollowers(@Param('id') id: string) {
     return this.admin.listStrategyFollowers(id);
+  }
+
+  /** Admin-assigned Master → Client mapping. */
+  @Post('strategies/:id/assign')
+  async assignClient(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: AssignClientDto) {
+    const s = await this.prisma.strategy.findUnique({ where: { id } });
+    if (!s) throw new NotFoundException('Strategy not found');
+    const { follower, warning } = await this.assigner.assign(s, dto, me.id);
+    return { follower: toStrategyFollowerView(follower), warning };
   }
 
   @Post('strategies/:id/pause')

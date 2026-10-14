@@ -7,7 +7,11 @@ import { clientInfo } from '../common/client-info';
 import { CurrentUser, RequestUser, Roles } from '../common/decorators/auth.decorators';
 import { toCopyOrderView, toStrategyFollowerView, toStrategyView } from '../common/mappers';
 import { PRISMA } from '../common/prisma/prisma.service';
-import { FollowDto } from './trading.dto';
+import { ExitPositionDto, FollowDto } from './trading.dto';
+import { BrokerApiError } from '../brokers/broker-http';
+import { MarketFeedService } from '../market-data/market-feed.service';
+import { PriceCacheService } from '../market-data/price-cache.service';
+import { overlayLivePrices, paperPositionView } from './price-overlay';
 import { TradingService } from './trading.service';
 import { RiskService } from './risk.service';
 import { AccountEvents } from '../realtime/account-events';
@@ -22,6 +26,8 @@ export class FollowerController {
     private readonly audit: AuditService,
     private readonly risk: RiskService,
     private readonly accountEvents: AccountEvents,
+    private readonly prices: PriceCacheService,
+    private readonly feed: MarketFeedService,
   ) {}
 
   @Get('strategies')
@@ -121,6 +127,21 @@ export class FollowerController {
     return { orders: results.reduce((s, r) => s + r.orders, 0), failed: results.reduce((s, r) => s + r.failed, 0), results };
   }
 
+  /** Exit one of my running positions (MARKET, full broker quantity). */
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('positions/exit')
+  async exitPosition(@CurrentUser() user: RequestUser, @Body() dto: ExitPositionDto) {
+    const account = await this.prisma.brokerAccount.findFirst({ where: { id: dto.accountId, userId: user.id } });
+    if (!account) throw new NotFoundException('Broker account not found');
+    try {
+      return await this.risk.exitPosition(account, dto, user.id);
+    } catch (err) {
+      if (err instanceof BrokerApiError) throw new BadRequestException(await this.trading.handleBrokerError(account, err));
+      throw err;
+    }
+  }
+
   // ------------------------------------------------------------- portfolio
 
   @Get('portfolio')
@@ -132,8 +153,8 @@ export class FollowerController {
     ]);
     return {
       paperMode: this.trading.isSimulated({ broker: 'ZERODHA', isPaper: false }),
-      live,
-      paperPositions: paper.map((p) => ({ ...p, averagePrice: p.averagePrice.toString(), lastPrice: p.lastPrice?.toString() ?? null, realizedPnl: p.realizedPnl.toString(), unrealizedPnl: p.unrealizedPnl.toString() })),
+      live: overlayLivePrices(live, this.prices, this.feed),
+      paperPositions: paper.map((p) => paperPositionView(p, this.prices, this.feed)),
       copyOrders: copyOrders.map(toCopyOrderView),
     };
   }

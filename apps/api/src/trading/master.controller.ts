@@ -17,7 +17,9 @@ import { RiskService } from './risk.service';
 import { AccountEvents } from '../realtime/account-events';
 import { MarketFeedService } from '../market-data/market-feed.service';
 import { instrumentKey, PriceCacheService } from '../market-data/price-cache.service';
-import { MasterOrderDto, StrategyDto, StrategyStatusDto } from './trading.dto';
+import { AssignClientDto, ExitPositionDto, MasterOrderDto, StrategyDto, StrategyStatusDto } from './trading.dto';
+import { ClientAssignService } from './client-assign.service';
+import { overlayLivePrices, paperPositionView } from './price-overlay';
 import { TradingService } from './trading.service';
 
 /** Everything a master trader needs: strategies, followers, live account data and trade placement. */
@@ -35,6 +37,7 @@ export class MasterController {
     private readonly accountEvents: AccountEvents,
     private readonly prices: PriceCacheService,
     private readonly feed: MarketFeedService,
+    private readonly assigner: ClientAssignService,
   ) {}
 
   private async own(user: RequestUser, id: string): Promise<Strategy> {
@@ -151,6 +154,40 @@ export class MasterController {
     }));
   }
 
+  /** Assign a client (by email) to one of my strategies, with allocation; optionally start copying right away. */
+  @HttpCode(HttpStatus.OK)
+  @Post('strategies/:id/assign')
+  async assign(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: AssignClientDto) {
+    const s = await this.own(user, id);
+    const { follower, warning } = await this.assigner.assign(s, dto, user.id);
+    return { follower: toStrategyFollowerView(follower), warning };
+  }
+
+  /** Remove a client from one of my strategies (copying stops; open positions are left as they are). */
+  @HttpCode(HttpStatus.OK)
+  @Post('strategies/:id/followers/:followerId/remove')
+  async unassign(@CurrentUser() user: RequestUser, @Param('id') id: string, @Param('followerId') followerId: string) {
+    await this.own(user, id);
+    return toStrategyFollowerView(await this.assigner.unassign(id, followerId, user.id));
+  }
+
+  /** Exit one running position of one of my clients (MARKET, full broker quantity). */
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('clients/:userId/positions/exit')
+  async exitClientPosition(@CurrentUser() user: RequestUser, @Param('userId') userId: string, @Body() dto: ExitPositionDto) {
+    const link = await this.prisma.strategyFollower.findFirst({ where: { followerUserId: userId, strategy: { masterUserId: user.id } } });
+    if (!link) throw new ForbiddenException('This client does not follow any of your strategies');
+    const account = await this.prisma.brokerAccount.findFirst({ where: { id: dto.accountId, userId } });
+    if (!account) throw new NotFoundException('Broker account not found for this client');
+    try {
+      return await this.risk.exitPosition(account, dto, user.id);
+    } catch (err) {
+      if (err instanceof BrokerApiError) throw new BadRequestException(await this.trading.handleBrokerError(account, err));
+      throw err;
+    }
+  }
+
   /** Live broker data of one of this master's followers (positions, holdings, orders, funds). */
   @Get('clients/:userId/live')
   async clientLive(@CurrentUser() user: RequestUser, @Param('userId') userId: string) {
@@ -160,7 +197,7 @@ export class MasterController {
       this.trading.liveData(userId),
       this.prisma.position.findMany({ where: { userId, isPaper: true }, orderBy: { updatedAt: 'desc' } }),
     ]);
-    return { live, paperPositions: paper.map((p) => ({ ...p, averagePrice: p.averagePrice.toString(), lastPrice: p.lastPrice?.toString() ?? null, realizedPnl: p.realizedPnl.toString(), unrealizedPnl: p.unrealizedPnl.toString() })) };
+    return { live: overlayLivePrices(live, this.prices, this.feed), paperPositions: paper.map((p) => paperPositionView(p, this.prices, this.feed)) };
   }
 
   // ---------------------------------------------------------------- trades
@@ -277,8 +314,8 @@ export class MasterController {
     return {
       paperMode: this.trading.isSimulated({ broker: 'ZERODHA', isPaper: false }),
       accounts: accounts.map(toBrokerAccountView),
-      live,
-      paperPositions: paper.map((p) => ({ ...p, averagePrice: p.averagePrice.toString(), lastPrice: p.lastPrice?.toString() ?? null, realizedPnl: p.realizedPnl.toString(), unrealizedPnl: p.unrealizedPnl.toString() })),
+      live: overlayLivePrices(live, this.prices, this.feed),
+      paperPositions: paper.map((p) => paperPositionView(p, this.prices, this.feed)),
     };
   }
 

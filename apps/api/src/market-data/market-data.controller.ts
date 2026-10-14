@@ -20,6 +20,24 @@ export class MarketDataController {
     private readonly prices: PriceCacheService,
   ) {}
 
+  /**
+   * Cached LTPs for up to 100 "EXCHANGE:SYMBOL" keys (comma separated). Memory only — no broker call — so the
+   * UI can poll it every couple of seconds for live price movement. Unknown keys are subscribed on the feed.
+   */
+  @Roles('MASTER', 'ADMIN', 'FOLLOWER')
+  @Get('ltps')
+  ltps(@Query('keys') keys?: string): Record<string, { ltp: number; ts: string } | null> {
+    const out: Record<string, { ltp: number; ts: string } | null> = {};
+    const list = (keys ?? '').split(',').map((k) => k.trim().toUpperCase()).filter((k) => /^[A-Z]{2,4}:[A-Z0-9&_\-]{1,40}$/.test(k)).slice(0, 100);
+    for (const k of list) {
+      const [ex, sym] = k.split(':') as [string, string];
+      this.feed.ensure(ex as never, sym);
+      const t = this.prices.getTick(k);
+      out[k] = t ? { ltp: t.ltp, ts: new Date(t.ts).toISOString() } : null;
+    }
+    return out;
+  }
+
   @Roles('MASTER', 'ADMIN')
   @Get('feed/status')
   status(): MarketFeedStatus {

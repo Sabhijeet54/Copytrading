@@ -40,6 +40,7 @@ export interface LiveAccount {
 }
 export interface PaperPosition {
   id: string;
+  brokerAccountId: string;
   exchange: string;
   symbol: string;
   productType: string;
@@ -118,7 +119,78 @@ export const useClientLive = (userId: string | null) =>
     queryKey: ['master', 'client', userId],
     queryFn: () => api<{ live: LiveAccount[]; paperPositions: PaperPosition[] }>(`/master/clients/${userId}/live`),
     enabled: !!userId,
+    refetchInterval: LIVE_MS,
   });
+
+// ------------------------------------------------------------ live prices / exits / assignment
+
+export type LtpMap = Record<string, { ltp: number; ts: string } | null>;
+
+/** Cached LTPs from the server price cache (no broker calls) — polled every 2 s for live movement. */
+export const useLtps = (keys: string[]) => {
+  const list = [...new Set(keys.map((k) => k.toUpperCase()))].sort();
+  return useQuery({
+    queryKey: ['ltps', list.join(',')],
+    queryFn: () => api<LtpMap>('/market/ltps', { query: { keys: list.join(',') } }),
+    enabled: list.length > 0,
+    refetchInterval: 2_000,
+    refetchIntervalInBackground: false,
+  });
+};
+
+export interface ExitPositionInput {
+  accountId: string;
+  exchange: string;
+  symbol: string;
+  productType: string;
+}
+
+/** Exit one running position. `clientUserId` set = master exiting a client's position. */
+export function useExitPosition(clientUserId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ExitPositionInput) =>
+      api<{ orderId: string | null; quantity: number }>(clientUserId ? `/master/clients/${clientUserId}/positions/exit` : '/follow/positions/exit', {
+        method: 'POST',
+        body,
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['follow'] });
+      void qc.invalidateQueries({ queryKey: ['master'] });
+    },
+  });
+}
+
+export interface AssignClientInput {
+  email: string;
+  allocationMode: 'FIXED_QUANTITY' | 'CAPITAL_PERCENTAGE' | 'PROPORTIONAL';
+  fixedQuantity?: number;
+  fixedLots?: number;
+  allocationPercent?: number;
+  allocationAmount?: number;
+  maxDailyLoss?: number;
+  startCopy?: boolean;
+}
+
+export function useAssignClient(strategyId: string, scope: 'master' | 'admin' = 'master') {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: AssignClientInput) =>
+      api<{ warning: string | null }>(`/${scope}/strategies/${strategyId}/assign`, { method: 'POST', body }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['master'] });
+      void qc.invalidateQueries({ queryKey: ['admin'] });
+    },
+  });
+}
+
+export function useRemoveClient(strategyId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (followerId: string) => api(`/master/strategies/${strategyId}/followers/${followerId}/remove`, { method: 'POST' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['master'] }),
+  });
+}
 
 export function useSaveStrategy() {
   const qc = useQueryClient();

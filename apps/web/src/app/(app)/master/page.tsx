@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { LogOut, Pause, Pencil, Play, Plus, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import type { StrategyView } from '@ctp/types';
-import { LiveAccountCard, PaperPositionsCard, Pnl } from '@/components/live-account';
+import { ExitButton, LiveAccountCard, PaperPositionsCard, Pnl } from '@/components/live-account';
 import { MarketFeedPanel } from '@/components/market-feed-panel';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
@@ -20,7 +20,9 @@ import { brokerLabel, formatDateTime, formatINR, humanize } from '@/lib/format';
 import {
   type MasterOrderInput,
   type StrategyInput,
+  useAssignClient,
   useClientLive,
+  useRemoveClient,
   useMasterLive,
   useMasterStrategies,
   useMasterTrade,
@@ -288,13 +290,13 @@ function ClientDialog({ userId, name, onClose }: { userId: string | null; name?:
       <DialogContent className="max-h-[90dvh] max-w-4xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{name ?? 'Client'}</DialogTitle>
-          <DialogDescription>Live broker data for this client.</DialogDescription>
+          <DialogDescription>Live broker data for this client. Use Exit to close a running position at MARKET.</DialogDescription>
         </DialogHeader>
         {q.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
         {q.error ? <p className="text-sm text-destructive">{q.error.message}</p> : null}
         <div className="grid gap-4">
-          {q.data?.live.map((a) => <LiveAccountCard key={a.accountId} a={a} />)}
-          {q.data && q.data.paperPositions.length > 0 ? <PaperPositionsCard rows={q.data.paperPositions} /> : null}
+          {q.data?.live.map((a) => <LiveAccountCard key={a.accountId} a={a} canExit clientUserId={userId ?? undefined} />)}
+          {q.data && q.data.paperPositions.length > 0 ? <PaperPositionsCard rows={q.data.paperPositions} canExit clientUserId={userId ?? undefined} /> : null}
           {q.data && q.data.live.length === 0 && q.data.paperPositions.length === 0 ? (
             <p className="text-sm text-muted-foreground">This client has no connected broker yet.</p>
           ) : null}
@@ -304,14 +306,104 @@ function ClientDialog({ userId, name, onClose }: { userId: string | null; name?:
   );
 }
 
+function AssignClientDialog({ strategy, open, onOpenChange }: { strategy: StrategyView; open: boolean; onOpenChange: (o: boolean) => void }) {
+  const assign = useAssignClient(strategy.id);
+  const empty = { email: '', allocationMode: 'FIXED_QUANTITY' as const, value: '', maxDailyLoss: '', startCopy: true };
+  const [f, setF] = useState<{ email: string; allocationMode: 'FIXED_QUANTITY' | 'CAPITAL_PERCENTAGE' | 'PROPORTIONAL'; value: string; maxDailyLoss: string; startCopy: boolean }>(empty);
+  useEffect(() => {
+    if (open) setF(empty);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  const valueLabel = f.allocationMode === 'FIXED_QUANTITY' ? 'Quantity per trade' : f.allocationMode === 'CAPITAL_PERCENTAGE' ? '% of master quantity' : 'Client capital (₹)';
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const v = Number(f.value);
+    if (!f.email.trim() || !(v > 0)) return toast.error('Email and a positive allocation value are required');
+    assign.mutate(
+      {
+        email: f.email.trim(),
+        allocationMode: f.allocationMode,
+        fixedQuantity: f.allocationMode === 'FIXED_QUANTITY' ? Math.round(v) : undefined,
+        allocationPercent: f.allocationMode === 'CAPITAL_PERCENTAGE' ? v : undefined,
+        allocationAmount: f.allocationMode === 'PROPORTIONAL' ? v : undefined,
+        maxDailyLoss: f.maxDailyLoss ? Number(f.maxDailyLoss) : undefined,
+        startCopy: f.startCopy,
+      },
+      {
+        onSuccess: (r) => {
+          if (r.warning) toast.warning(r.warning);
+          else toast.success(`Client assigned to ${strategy.name}`);
+          onOpenChange(false);
+        },
+        onError: (err) => toast.error(err.message),
+      },
+    );
+  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <form onSubmit={submit} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>Assign client · {strategy.name}</DialogTitle>
+            <DialogDescription>The client must already have an account (role: client). Their connected broker account is used.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-1.5">
+            <Label htmlFor="assign-email">Client email</Label>
+            <Input id="assign-email" type="email" autoComplete="off" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} required />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="assign-mode">Allocation</Label>
+              <Select id="assign-mode" value={f.allocationMode} onChange={(e) => setF({ ...f, allocationMode: e.target.value as typeof f.allocationMode, value: '' })}>
+                <option value="FIXED_QUANTITY">Fixed quantity</option>
+                <option value="CAPITAL_PERCENTAGE">% of master qty</option>
+                <option value="PROPORTIONAL">Capital based</option>
+              </Select>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="assign-value">{valueLabel}</Label>
+              <Input id="assign-value" type="number" min="0" step="any" inputMode="decimal" value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} required />
+            </div>
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="assign-loss">Max daily loss (₹, optional)</Label>
+            <Input id="assign-loss" type="number" min="0" step="any" inputMode="decimal" value={f.maxDailyLoss} onChange={(e) => setF({ ...f, maxDailyLoss: e.target.value })} />
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" className="size-4" checked={f.startCopy} onChange={(e) => setF({ ...f, startCopy: e.target.checked })} />
+            Start copying now (only if the client&apos;s broker is connected)
+          </label>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={assign.isPending}>
+              {assign.isPending ? 'Assigning…' : 'Assign client'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function FollowersCard({ strategy }: { strategy: StrategyView }) {
   const q = useStrategyFollowers(strategy.id);
+  const remove = useRemoveClient(strategy.id);
   const [client, setClient] = useState<{ id: string; name?: string } | null>(null);
+  const [assignOpen, setAssignOpen] = useState(false);
   return (
     <Card id="clients" className="scroll-mt-20">
       <CardHeader>
-        <CardTitle>Clients · {strategy.name}</CardTitle>
-        <CardDescription>Who follows this strategy, their broker status and allocation.</CardDescription>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle>Clients · {strategy.name}</CardTitle>
+            <CardDescription>Who follows this strategy, their broker status and allocation.</CardDescription>
+          </div>
+          <Button size="sm" onClick={() => setAssignOpen(true)}>
+            <Plus /> Assign client
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="overflow-x-auto">
         <Table>
@@ -365,9 +457,23 @@ function FollowersCard({ strategy }: { strategy: StrategyView }) {
                     <Pnl value={Number(f.paperRealizedPnl) + Number(f.paperUnrealizedPnl)} />
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button size="sm" variant="outline" onClick={() => setClient({ id: f.followerUserId, name: f.followerName })}>
-                      View
-                    </Button>
+                    <div className="flex justify-end gap-2">
+                      <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => setClient({ id: f.followerUserId, name: f.followerName })}>
+                        View / exit
+                      </Button>
+                      {f.copyStatus !== 'OFF' ? (
+                        <ExitButton
+                          label="Remove"
+                          pending={remove.isPending && remove.variables === f.id}
+                          onConfirm={() =>
+                            remove.mutate(f.id, {
+                              onSuccess: () => toast.success(`${f.followerName ?? 'Client'} removed — copying stopped`),
+                              onError: (err) => toast.error(err.message),
+                            })
+                          }
+                        />
+                      ) : null}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
@@ -376,6 +482,7 @@ function FollowersCard({ strategy }: { strategy: StrategyView }) {
         </Table>
       </CardContent>
       <ClientDialog userId={client?.id ?? null} name={client?.name} onClose={() => setClient(null)} />
+      <AssignClientDialog strategy={strategy} open={assignOpen} onOpenChange={setAssignOpen} />
     </Card>
   );
 }

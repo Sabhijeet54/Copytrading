@@ -282,8 +282,8 @@ export default function PortfolioPage() {
             Connect your broker on the <Link className="underline" href="/dashboard">Dashboard</Link> to see live positions.
           </p>
         ) : null}
-        {p?.live.map((a) => <LiveAccountCard key={a.accountId} a={a} />)}
-        {p && p.paperPositions.length > 0 ? <PaperPositionsCard rows={p.paperPositions} /> : null}
+        {p?.live.map((a) => <LiveAccountCard key={a.accountId} a={a} canExit />)}
+        {p && p.paperPositions.length > 0 ? <PaperPositionsCard rows={p.paperPositions} canExit /> : null}
 
         <Card id="orders" className="scroll-mt-20">
           <CardHeader>

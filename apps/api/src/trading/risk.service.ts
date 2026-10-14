@@ -1,6 +1,6 @@
-import { Inject, Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 import type Redis from 'ioredis';
-import type { BrokerAccount, PrismaClient, ProductType } from '@ctp/database';
+import type { BrokerAccount, Exchange, PrismaClient, ProductType } from '@ctp/database';
 import { type CopyHaltState, RedisKeys, WsEvent } from '@ctp/types';
 import { AuditService } from '../audit/audit.service';
 import { PRISMA } from '../common/prisma/prisma.service';
@@ -195,6 +195,63 @@ export class RiskService implements OnApplicationBootstrap, OnModuleDestroy {
     );
   }
 
+  /** Follower subscriptions using this account (their net copy positions must follow manual exits). */
+  private async followerIdsOf(accountId: string): Promise<string[]> {
+    const subs = await this.prisma.strategyFollower.findMany({ where: { brokerAccountId: accountId }, select: { id: true } });
+    return subs.map((s) => s.id);
+  }
+
+  /**
+   * Exits ONE open position of an account with a MARKET order (paper: closes the paper position at LTP).
+   * Quantity comes from the broker's own position, so it never sells more than is held.
+   */
+  async exitPosition(
+    account: BrokerAccount,
+    pos: { exchange: Exchange; symbol: string; productType: ProductType },
+    actorUserId: string,
+  ): Promise<{ orderId: string | null; quantity: number }> {
+    if (account.mode === 'DATA_ONLY') throw new BadRequestException('A data-only (master) account never places orders');
+    const key = instrumentKey(pos.exchange, pos.symbol);
+    let quantity = 0;
+    let orderId: string | null = null;
+    if (this.trading.isSimulated(account)) {
+      const p = await this.prisma.position.findFirst({
+        where: { brokerAccountId: account.id, isPaper: true, exchange: pos.exchange, symbol: pos.symbol, productType: pos.productType, quantity: { not: 0 } },
+      });
+      if (!p) throw new BadRequestException('No open position for this symbol');
+      const price = this.prices.get(key) ?? Number(p.lastPrice ?? p.averagePrice);
+      quantity = Math.abs(p.quantity);
+      await this.engine.applyPaperFill(account.userId, account.id, { ...p, side: p.quantity > 0 ? 'SELL' : 'BUY' }, quantity, price);
+    } else {
+      const adapter = await this.trading.adapterFor(account);
+      const p = (await adapter.positions()).find(
+        (x) => x.exchange === pos.exchange && x.symbol === pos.symbol && x.productType === pos.productType && x.quantity !== 0,
+      );
+      if (!p) throw new BadRequestException('No open position for this symbol at the broker');
+      quantity = Math.abs(p.quantity);
+      this.trading.assertOrderAllowed(account);
+      ({ brokerOrderId: orderId } = await adapter.placeOrder({
+        exchange: p.exchange,
+        symbol: p.symbol,
+        side: p.quantity > 0 ? 'SELL' : 'BUY',
+        quantity,
+        orderType: 'MARKET',
+        productType: p.productType,
+        tag: 'ctpexit',
+      }));
+    }
+    this.registry.clearPosition(await this.followerIdsOf(account.id), pos.exchange, pos.symbol, pos.productType);
+    await this.audit.log({
+      action: 'COPY_STOPPED',
+      actorUserId,
+      targetType: 'BrokerAccount',
+      targetId: account.id,
+      metadata: { manualExit: true, exchange: pos.exchange, symbol: pos.symbol, productType: pos.productType, quantity, orderId },
+    });
+    this.realtime.toUser(account.userId, WsEvent.POSITION_UPDATED, { symbol: pos.symbol, status: 'EXITED', quantity });
+    return { orderId, quantity };
+  }
+
   /** Square off every client trading account currently in the registry (or every connected TRADING account). */
   async squareOffAll(opts: { intradayOnly: boolean; includeAllTradingAccounts?: boolean }): Promise<SquareOffResult[]> {
     const ids = new Set(this.registry.allEntries().map((e) => e.accountId));
@@ -214,6 +271,7 @@ export class RiskService implements OnApplicationBootstrap, OnModuleDestroy {
       for (const p of rows.filter((r) => keep(r.productType))) {
         const price = this.prices.get(instrumentKey(p.exchange, p.symbol)) ?? Number(p.lastPrice ?? p.averagePrice);
         await this.engine.applyPaperFill(account.userId, account.id, { ...p, side: p.quantity > 0 ? 'SELL' : 'BUY' }, Math.abs(p.quantity), price);
+        this.registry.clearPosition(await this.followerIdsOf(account.id), p.exchange, p.symbol, p.productType);
         res.orders++;
       }
       return res;
@@ -231,6 +289,8 @@ export class RiskService implements OnApplicationBootstrap, OnModuleDestroy {
         try {
           this.trading.assertOrderAllowed(account);
           await adapter.placeOrder({ exchange: p.exchange, symbol: p.symbol, side: p.quantity > 0 ? 'SELL' : 'BUY', quantity: Math.abs(p.quantity), orderType: 'MARKET', productType: p.productType, tag: 'ctpsqoff' });
+          // Keep the copy engine's net position in step, so a later master exit never double-exits.
+          this.registry.clearPosition(await this.followerIdsOf(account.id), p.exchange, p.symbol, p.productType);
           res.orders++;
         } catch (e) {
           res.failed++;

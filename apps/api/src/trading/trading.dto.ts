@@ -13,6 +13,7 @@ import {
   Max,
   MaxLength,
   Min,
+  IsBoolean,
 } from 'class-validator';
 
 const EXCHANGES = ['NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS', 'BCD'] as const;
@@ -48,6 +49,33 @@ export class MasterOrderDto {
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) price?: number;
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) triggerPrice?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) lotSize?: number;
+}
+
+export class AssignClientDto {
+  @Transform(trim) @IsString() @Length(3, 200) email!: string;
+  @IsOptional() @IsString() brokerAccountId?: string;
+  @IsOptional() @IsEnum({ FIXED_QUANTITY: 'FIXED_QUANTITY', CAPITAL_PERCENTAGE: 'CAPITAL_PERCENTAGE', PROPORTIONAL: 'PROPORTIONAL' })
+  allocationMode?: 'FIXED_QUANTITY' | 'CAPITAL_PERCENTAGE' | 'PROPORTIONAL';
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) allocationAmount?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0.01) @Max(1000) allocationPercent?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) fixedQuantity?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) fixedLots?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) maxLots?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) maxQuantity?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) maxTradeValue?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) maxDailyLoss?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) maxTradesPerDay?: number;
+  @IsOptional() @IsArray() @ArrayUnique() @IsIn(['EQ', 'FO'], { each: true }) allowedSegments?: ('EQ' | 'FO')[];
+  @IsOptional() @IsBoolean() startCopy?: boolean;
+}
+
+export class ExitPositionDto {
+  @IsString() accountId!: string;
+  @IsIn(EXCHANGES) exchange!: (typeof EXCHANGES)[number];
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
+  @Matches(/^[A-Z0-9&_\-]{1,40}$/, { message: 'Invalid symbol' })
+  symbol!: string;
+  @IsIn(['DELIVERY', 'INTRADAY', 'CARRY_FORWARD']) productType!: 'DELIVERY' | 'INTRADAY' | 'CARRY_FORWARD';
 }
 
 export class FollowDto {
