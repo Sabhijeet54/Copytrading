@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Inject, NotFoundException, Param, Post, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpCode, HttpStatus, Inject, NotFoundException, Param, Post, Req } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import type { PrismaClient } from '@ctp/database';
@@ -7,9 +7,8 @@ import { clientInfo } from '../common/client-info';
 import { CurrentUser, RequestUser, Roles } from '../common/decorators/auth.decorators';
 import { toCopyOrderView, toStrategyFollowerView, toStrategyView } from '../common/mappers';
 import { PRISMA } from '../common/prisma/prisma.service';
-import { ExitPositionDto, FollowDto, TradingModeDto } from './trading.dto';
+import { FollowDto, TradingModeDto } from './trading.dto';
 import { allocationLabel, ClientSummaryService, isRemoved } from './client-summary.service';
-import { BrokerApiError } from '../brokers/broker-http';
 import { MarketFeedService } from '../market-data/market-feed.service';
 import { PriceCacheService } from '../market-data/price-cache.service';
 import { startOfTradingDayIST } from '../admin/admin.service';
@@ -195,19 +194,11 @@ export class FollowerController {
     return { orders: results.reduce((s, r) => s + r.orders, 0), failed: results.reduce((s, r) => s + r.failed, 0), results };
   }
 
-  /** Exit one of my running positions (MARKET, full broker quantity). */
-  @Throttle({ default: { limit: 20, ttl: 60_000 } })
-  @HttpCode(HttpStatus.OK)
+  /** Clients may not exit single positions — exits come from the master (or "Exit all & stop copy"). */
+  @HttpCode(HttpStatus.FORBIDDEN)
   @Post('positions/exit')
-  async exitPosition(@CurrentUser() user: RequestUser, @Body() dto: ExitPositionDto) {
-    const account = await this.prisma.brokerAccount.findFirst({ where: { id: dto.accountId, userId: user.id } });
-    if (!account) throw new NotFoundException('Broker account not found');
-    try {
-      return await this.risk.exitPosition(account, dto, user.id);
-    } catch (err) {
-      if (err instanceof BrokerApiError) throw new BadRequestException(await this.trading.handleBrokerError(account, err));
-      throw err;
-    }
+  exitPosition() {
+    throw new ForbiddenException('Position exit is managed by your master trader.');
   }
 
   // ------------------------------------------------------------- portfolio

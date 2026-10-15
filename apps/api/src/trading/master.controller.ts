@@ -21,6 +21,8 @@ import { AssignClientDto, ClientHistoryQueryDto, ExitPositionDto, MasterOrderDto
 import { SignalService } from './signal.service';
 import { startOfTradingDayIST } from '../admin/admin.service';
 import { ClientAssignService } from './client-assign.service';
+import { ClientRegistryService } from './client-registry.service';
+import { FNO_EXCHANGES, FnoCatalogService, type FnoExchange } from '../market-data/fno-catalog.service';
 import { clientDirectory } from './client-directory';
 import { allocationLabel, ClientSummaryService, isRemoved } from './client-summary.service';
 import { licenceStatus } from '../common/mappers';
@@ -45,6 +47,8 @@ export class MasterController {
     private readonly assigner: ClientAssignService,
     private readonly signals: SignalService,
     private readonly summary: ClientSummaryService,
+    private readonly fno: FnoCatalogService,
+    private readonly registry: ClientRegistryService,
   ) {}
 
   private async own(user: RequestUser, id: string): Promise<Strategy> {
@@ -193,6 +197,23 @@ export class MasterController {
       if (err instanceof BrokerApiError) throw new BadRequestException(await this.trading.handleBrokerError(account, err));
       throw err;
     }
+  }
+
+  /** F&O underlyings for the order form (index + stock options / futures, MCX) — from the broker instrument list. */
+  @Get('fno/scripts')
+  fnoScripts(@Query('exchange') exchange?: string, @Query('q') q?: string) {
+    const ex = (exchange ?? 'NFO').toUpperCase();
+    if (!(FNO_EXCHANGES as readonly string[]).includes(ex)) throw new BadRequestException('exchange must be NFO, BFO or MCX');
+    return this.fno.scripts(ex as FnoExchange, (q ?? '').slice(0, 40));
+  }
+
+  /** Live expiries (nearest first) with lot size and strikes for one underlying. */
+  @Get('fno/chain')
+  fnoChain(@Query('exchange') exchange?: string, @Query('name') name?: string, @Query('kind') kind?: string) {
+    const ex = (exchange ?? 'NFO').toUpperCase();
+    if (!(FNO_EXCHANGES as readonly string[]).includes(ex)) throw new BadRequestException('exchange must be NFO, BFO or MCX');
+    if (!name?.trim()) throw new BadRequestException('name is required');
+    return this.fno.chain(ex as FnoExchange, name.slice(0, 40), kind === 'FUT' ? 'FUT' : 'OPT');
   }
 
   /** Client picker for "Assign client": active client accounts (search by name / email / mobile). */
@@ -344,6 +365,12 @@ export class MasterController {
     if (dto.targetPrice != null && dto.stopLossPrice != null && (dto.side === 'BUY' ? dto.targetPrice <= dto.stopLossPrice : dto.targetPrice >= dto.stopLossPrice)) {
       throw new BadRequestException(dto.side === 'BUY' ? 'For a BUY, target must be above stop loss' : 'For a SELL, target must be below stop loss');
     }
+
+    // An order against an open position only EXITS it: never sell more than was bought (or buy back more than
+    // was sold) — the extra would open an opposite trade for every client.
+    const open = this.registry.masterNetOf(strategy.id, dto.exchange, dto.symbol, dto.productType);
+    const signedQty = dto.side === 'BUY' ? dto.quantity : -dto.quantity;
+    if (open !== 0 && Math.sign(signedQty) !== Math.sign(open) && dto.quantity > Math.abs(open)) dto.quantity = Math.abs(open);
 
     const accounts = await this.prisma.brokerAccount.findMany({ where: { userId: user.id }, orderBy: { createdAt: 'asc' } });
     const account = dto.brokerAccountId

@@ -1,4 +1,5 @@
 import type { Exchange, OrderStatus, OrderType, ProductType } from '@ctp/database';
+import { normalizeBrokerSymbol, symbolVariants } from './symbols';
 import { BrokerApiError, brokerFetch } from '../brokers/broker-http';
 import { Throttle } from '../brokers/throttle';
 import {
@@ -159,15 +160,20 @@ export class AngelOneAdapter implements BrokerAdapter {
   private async lookup(exchange: Exchange, symbol: string): Promise<{ symbol: string; token: string }> {
     const sym = symbol.toUpperCase();
     const key = `${exchange}:${sym}`;
-    const base = canonicalSymbol(sym);
-    const rows = (await this.call<{ tradingsymbol: string; symboltoken: string }[]>('/rest/secure/angelbroking/order/v1/searchScrip', 'POST', {
-      exchange,
-      searchscrip: base,
-    })) ?? [];
-    const pick =
-      rows.find((r) => r.tradingsymbol.toUpperCase() === sym) ??
-      rows.find((r) => r.tradingsymbol.toUpperCase() === `${base}-EQ`) ??
-      rows.find((r) => canonicalSymbol(r.tradingsymbol) === base);
+    // BSE (BFO) / weekly contracts are named differently at Angel (e.g. SENSEX26O1573800CE) — try every variant.
+    let pick: { tradingsymbol: string; symboltoken: string } | undefined;
+    for (const v of symbolVariants(sym)) {
+      const base = canonicalSymbol(v);
+      const rows = (await this.call<{ tradingsymbol: string; symboltoken: string }[]>('/rest/secure/angelbroking/order/v1/searchScrip', 'POST', {
+        exchange,
+        searchscrip: base,
+      })) ?? [];
+      pick =
+        rows.find((r) => r.tradingsymbol.toUpperCase() === v) ??
+        rows.find((r) => r.tradingsymbol.toUpperCase() === `${base}-EQ`) ??
+        rows.find((r) => canonicalSymbol(r.tradingsymbol) === base);
+      if (pick) break;
+    }
     if (!pick) throw new BrokerApiError(`Angel One: symbol ${exchange}:${symbol} not found.`);
     const out = { symbol: pick.tradingsymbol, token: pick.symboltoken };
     AngelOneAdapter.tokenCache.set(key, out);
@@ -225,7 +231,7 @@ export class AngelOneAdapter implements BrokerAdapter {
     return rows.map((r) => ({
       brokerOrderId: String(r.orderid),
       exchange: toExchange(String(r.exchange)),
-      symbol: canonicalSymbol(String(r.tradingsymbol)),
+      symbol: normalizeBrokerSymbol(String(r.tradingsymbol)),
       instrumentToken: r.symboltoken ? String(r.symboltoken) : undefined,
       side: String(r.transactiontype) === 'SELL' ? 'SELL' : 'BUY',
       orderType: TYPE_IN[String(r.ordertype)] ?? 'MARKET',
@@ -248,7 +254,7 @@ export class AngelOneAdapter implements BrokerAdapter {
     const rows = (await this.call<Record<string, unknown>[]>('/rest/secure/angelbroking/order/v1/getPosition', 'GET')) ?? [];
     return rows.map((p) => ({
       exchange: toExchange(String(p.exchange)),
-      symbol: canonicalSymbol(String(p.tradingsymbol)),
+      symbol: normalizeBrokerSymbol(String(p.tradingsymbol)),
       productType: PRODUCT_IN[String(p.producttype)] ?? 'INTRADAY',
       quantity: Number(p.netqty) || 0,
       averagePrice: num(p.avgnetprice ?? p.netprice) ?? 0,

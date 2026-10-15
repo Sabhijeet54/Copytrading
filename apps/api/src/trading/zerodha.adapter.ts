@@ -1,4 +1,5 @@
 import type { OrderStatus, OrderType, ProductType } from '@ctp/database';
+import { DERIVATIVE_EXCHANGES, kiteSymbols, normalizeBrokerSymbol } from './symbols';
 import { BrokerApiError, brokerFetch } from '../brokers/broker-http';
 import {
   AdapterOptions,
@@ -69,7 +70,7 @@ export class ZerodhaAdapter implements BrokerAdapter {
   async placeOrder(o: PlaceOrderInput): Promise<{ brokerOrderId: string }> {
     assertCanTrade(this.opts);
     const form: Record<string, string> = {
-      tradingsymbol: canonicalSymbol(o.symbol),
+      tradingsymbol: await this.kiteSymbol(o.exchange, o.symbol),
       exchange: o.exchange,
       transaction_type: o.side,
       order_type: TYPE_OUT[o.orderType],
@@ -96,12 +97,36 @@ export class ZerodhaAdapter implements BrokerAdapter {
     await this.call(`/orders/regular/${encodeURIComponent(brokerOrderId)}`, 'DELETE');
   }
 
+  /** Canonical platform symbol → Kite tradingsymbol (BSE / weekly contracts are named differently at Kite). */
+  private async kiteSymbol(exchange: string, symbol: string): Promise<string> {
+    const r = kiteSymbols.resolver;
+    if (r && DERIVATIVE_EXCHANGES.has(exchange)) {
+      await r.ensure(exchange).catch(() => undefined);
+      const k = r.toKite(exchange, symbol);
+      if (k) return k;
+    }
+    return canonicalSymbol(symbol);
+  }
+
+  /** Kite tradingsymbol → canonical platform symbol. Call `prepare` first for the exchanges involved. */
+  private fromKite(exchange: string, symbol: string): string {
+    return kiteSymbols.resolver?.fromKite(exchange, canonicalSymbol(symbol)) ?? normalizeBrokerSymbol(symbol);
+  }
+
+  private async prepare(rows: Record<string, unknown>[]): Promise<void> {
+    const r = kiteSymbols.resolver;
+    if (!r) return;
+    const exs = [...new Set(rows.map((x) => String(x.exchange)).filter((e) => DERIVATIVE_EXCHANGES.has(e)))];
+    await Promise.all(exs.map((e) => r.ensure(e).catch(() => undefined)));
+  }
+
   async orders(): Promise<BrokerOrder[]> {
     const rows = (await this.call<Record<string, unknown>[]>('/orders')) ?? [];
+    await this.prepare(rows);
     return rows.map((r) => ({
       brokerOrderId: String(r.order_id),
       exchange: toExchange(String(r.exchange)),
-      symbol: canonicalSymbol(String(r.tradingsymbol)),
+      symbol: this.fromKite(String(r.exchange), String(r.tradingsymbol)),
       instrumentToken: r.instrument_token ? String(r.instrument_token) : undefined,
       side: String(r.transaction_type) === 'SELL' ? 'SELL' : 'BUY',
       orderType: TYPE_IN[String(r.order_type)] ?? 'MARKET',
@@ -121,9 +146,10 @@ export class ZerodhaAdapter implements BrokerAdapter {
 
   async positions(): Promise<BrokerPosition[]> {
     const d = await this.call<{ net: Record<string, unknown>[] }>('/portfolio/positions');
+    await this.prepare(d?.net ?? []);
     return (d?.net ?? []).map((p) => ({
       exchange: toExchange(String(p.exchange)),
-      symbol: canonicalSymbol(String(p.tradingsymbol)),
+      symbol: this.fromKite(String(p.exchange), String(p.tradingsymbol)),
       productType: PRODUCT_IN[String(p.product)] ?? 'INTRADAY',
       quantity: Number(p.quantity) || 0,
       averagePrice: num(p.average_price) ?? 0,
@@ -151,7 +177,7 @@ export class ZerodhaAdapter implements BrokerAdapter {
 
   async ltp(exchange: string, symbol: string): Promise<number | null> {
     try {
-      const key = `${exchange}:${canonicalSymbol(symbol)}`;
+      const key = `${exchange}:${await this.kiteSymbol(exchange, symbol)}`;
       const d = await this.call<Record<string, { last_price: number }>>(`/quote/ltp?i=${encodeURIComponent(key)}`);
       return num(d?.[key]?.last_price);
     } catch {

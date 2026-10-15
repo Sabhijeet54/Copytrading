@@ -16,6 +16,9 @@ import { formatDateTime, formatINR, humanize } from '@/lib/format';
 import {
   type MasterOrderInput,
   type SignalRow,
+  type FnoExchange,
+  useFnoChain,
+  useFnoScripts,
   useLtps,
   usePlaceMasterOrder,
   useSetSignalTpSl,
@@ -37,6 +40,7 @@ const SEGMENTS: { value: Segment; label: string }[] = [
   { value: 'MCX:FUT', label: 'MCX · Futures' },
   { value: 'MCX:OPT', label: 'MCX · Options' },
 ];
+const fmtExpiry = (d: string) => new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${d}T00:00:00Z`));
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
 /** Exchange + broker trading symbol (Angel One SmartAPI format: NIFTY19OCT2622600PE, NIFTY28OCT26FUT, SBIN). */
@@ -105,14 +109,50 @@ export function SignalForm({ strategies }: { strategies: StrategyView[] }) {
 
   const kind = f.segment.split(':')[1] as 'EQ' | 'FUT' | 'OPT';
   const derivative = kind !== 'EQ';
+
+  // Full F&O list from the broker instrument master: scripts, live expiries, strikes and lot size.
+  const venue = f.segment.split(':')[0];
+  const fnoEx: FnoExchange | null = !derivative ? null : venue === 'NSE' ? 'NFO' : venue === 'BSE' ? 'BFO' : 'MCX';
+  const scripts = useFnoScripts(fnoEx, f.script);
+  const chain = useFnoChain(fnoEx, f.script, kind === 'FUT' ? 'FUT' : 'OPT');
+  const expiries = chain.data?.expiries ?? [];
+  const catalog = derivative && expiries.length > 0;
+  const selExpiry = expiries.find((e) => e.date === f.expiry);
+  const strikes = selExpiry?.strikes ?? [];
+  // Nearest expiry is picked automatically (weekly if the script has weeklies, else monthly) + its lot size.
+  useEffect(() => {
+    if (!catalog) return;
+    const keep = expiries.find((e) => e.date === f.expiry);
+    const pick = keep ?? expiries[0]!;
+    setF((p) => (p.expiry === pick.date && p.lotSize === String(pick.lotSize) ? p : { ...p, expiry: pick.date, lotSize: String(pick.lotSize) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalog, chain.data]);
+  // Strike: keep a valid one, else the middle of the chain (ATM-ish).
+  useEffect(() => {
+    if (!catalog || kind !== 'OPT' || !strikes.length) return;
+    if (strikes.includes(Number(f.strike))) return;
+    setF((p) => ({ ...p, strike: String(strikes[Math.floor(strikes.length / 2)]) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalog, kind, f.expiry, strikes.length]);
   const inst = buildInstrument(f.segment, f.script, f.expiry, f.strike, f.opt);
   const ltp = useLtps(inst ? [`${inst.exchange}:${inst.symbol}`] : []).data?.[inst ? `${inst.exchange}:${inst.symbol}`.toUpperCase() : '']?.ltp ?? null;
   const lotSize = derivative ? Number(f.lotSize) || 0 : 1;
   const quantity = (Number(f.lots) || 0) * (derivative ? lotSize : 1);
+  // My open position in this exact contract (open signals of the selected strategy).
+  const openSignals = useSignals('open', 'all').data ?? [];
+  const openNet = inst
+    ? openSignals
+        .filter((r) => r.strategyId === f.strategyId && r.exchange === inst.exchange && r.symbol === inst.symbol && r.productType === f.productType)
+        .reduce((a, r) => a + (r.side === 'BUY' ? r.openQuantity : -r.openQuantity), 0)
+    : 0;
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF((p) => ({ ...p, [k]: e.target.value }));
 
   const submit = (side: 'BUY' | 'SELL') => {
     if (!f.strategyId) return toast.error('Choose a strategy');
+    const exiting = openNet !== 0 && (side === 'SELL') === openNet > 0;
+    if (!exiting && openNet === 0 && side === 'SELL' && derivative) {
+      if (!window.confirm('You have no open BUY in this contract — this SELL opens a NEW short position for all clients. Continue?')) return;
+    }
     if (!inst) return toast.error(derivative ? 'Fill script, expiry' + (kind === 'OPT' ? ' and strike' : '') : 'Enter a script');
     if (derivative && !lotSize) return toast.error('Enter the lot size');
     if (!(quantity > 0)) return toast.error('Quantity must be at least 1');
@@ -129,12 +169,15 @@ export function SignalForm({ strategies }: { strategies: StrategyView[] }) {
     } catch {
       /* ignore */
     }
+    // Exit never exceeds the open position (no accidental opposite trade).
+    const qty = exiting ? Math.min(quantity, Math.abs(openNet)) : quantity;
+    if (exiting && qty < quantity) toast.info(`Only ${Math.abs(openNet)} open — exiting ${qty}`);
     const body: MasterOrderInput = {
       strategyId: f.strategyId,
       exchange: inst.exchange,
       symbol: inst.symbol,
       side,
-      quantity,
+      quantity: qty,
       orderType: f.orderType,
       productType: f.productType,
       price: f.orderType === 'LIMIT' ? Number(f.price) : undefined,
@@ -145,7 +188,7 @@ export function SignalForm({ strategies }: { strategies: StrategyView[] }) {
     place.mutate(body, {
       onSuccess: (t) => {
         const ok = t.copyOrders.filter((c) => c.status === 'FILLED' || c.status === 'SUBMITTED').length;
-        toast.success(`${side} ${quantity} ${inst.symbol} · copied to ${ok}/${t.copyOrders.length} clients`);
+        toast.success(`${side} ${qty} ${inst.symbol}${exiting ? ' (exit)' : ''} · copied to ${ok}/${t.copyOrders.length} clients`);
       },
       onError: (err) => toast.error(err.message),
     });
@@ -156,7 +199,7 @@ export function SignalForm({ strategies }: { strategies: StrategyView[] }) {
       <CardHeader>
         <CardTitle>Place signal</CardTitle>
         <CardDescription>
-          Symbol directory (Angel One format) · stock: <code>SBIN</code> · fut: <code>NIFTY28OCT26FUT</code> · opt: <code>NIFTY19OCT2622600PE</code>
+          Pick segment and script — expiry (nearest first), strikes and lot size come from the exchange contract list automatically.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -175,7 +218,23 @@ export function SignalForm({ strategies }: { strategies: StrategyView[] }) {
                 </Select>
               </Field>
               <Field label="Script" htmlFor="sg-script">
-                <Input id="sg-script" value={f.script} onChange={(e) => setF((p) => ({ ...p, script: e.target.value.toUpperCase(), lotSize: rememberedLot(e.target.value) }))} autoComplete="off" />
+                <Input
+                  id="sg-script"
+                  list={fnoEx ? 'sg-script-list' : undefined}
+                  value={f.script}
+                  onChange={(e) => setF((p) => ({ ...p, script: e.target.value.toUpperCase(), lotSize: rememberedLot(e.target.value), expiry: '', strike: '' }))}
+                  autoComplete="off"
+                  placeholder={fnoEx ? 'Type: NIFTY, RELIANCE, SENSEX…' : 'e.g. SBIN'}
+                />
+                {fnoEx ? (
+                  <datalist id="sg-script-list">
+                    {(scripts.data ?? []).map((x) => (
+                      <option key={x.name} value={x.name}>
+                        {`lot ${x.lotSize}${x.nearestExpiry ? ` · next expiry ${x.nearestExpiry}` : ''}`}
+                      </option>
+                    ))}
+                  </datalist>
+                ) : null}
               </Field>
               <Field label="Segment" htmlFor="sg-seg">
                 <Select id="sg-seg" value={f.segment} onChange={set('segment')}>
@@ -198,11 +257,39 @@ export function SignalForm({ strategies }: { strategies: StrategyView[] }) {
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {derivative ? (
                 <>
-                  <Field label="Expiry" htmlFor="sg-exp">
-                    <Input id="sg-exp" type="date" value={f.expiry} onChange={set('expiry')} />
+                  <Field
+                    label="Expiry"
+                    htmlFor="sg-exp"
+                    hint={catalog ? 'Nearest expiry is selected automatically' : chain.isFetching ? 'Loading expiries…' : f.script.trim() ? 'Script not in F&O list — enter the date' : undefined}
+                  >
+                    {catalog ? (
+                      <Select
+                        id="sg-exp"
+                        value={f.expiry}
+                        onChange={(e) => {
+                          const ex = expiries.find((x) => x.date === e.target.value);
+                          setF((p) => ({ ...p, expiry: e.target.value, lotSize: ex ? String(ex.lotSize) : p.lotSize }));
+                        }}
+                      >
+                        {expiries.map((x, i) => (
+                          <option key={x.date} value={x.date}>
+                            {fmtExpiry(x.date)} · {x.monthly ? 'Monthly' : 'Weekly'}
+                            {i === 0 ? ' (nearest)' : ''}
+                          </option>
+                        ))}
+                      </Select>
+                    ) : (
+                      <Input id="sg-exp" type="date" value={f.expiry} onChange={set('expiry')} />
+                    )}
                   </Field>
-                  <Field label="Lot size" htmlFor="sg-lot" hint="Remembered per script — verify after exchange revisions">
-                    <Input id="sg-lot" type="number" min={1} inputMode="numeric" value={f.lotSize} onChange={set('lotSize')} />
+                  <Field label="Lot size" htmlFor="sg-lot" hint={catalog ? 'From the exchange contract list' : 'Remembered per script — verify after exchange revisions'}>
+                    {catalog ? (
+                      <div id="sg-lot" className="flex h-9 items-center rounded-md border bg-muted/40 px-3 text-sm font-semibold tabular-nums">
+                        {f.lotSize || '—'}
+                      </div>
+                    ) : (
+                      <Input id="sg-lot" type="number" min={1} inputMode="numeric" value={f.lotSize} onChange={set('lotSize')} />
+                    )}
                   </Field>
                 </>
               ) : null}
@@ -211,7 +298,17 @@ export function SignalForm({ strategies }: { strategies: StrategyView[] }) {
               </Field>
               {kind === 'OPT' ? (
                 <Field label="Strike" htmlFor="sg-strike">
-                  <Input id="sg-strike" type="number" min={0} step="any" inputMode="decimal" value={f.strike} onChange={set('strike')} />
+                  {catalog && strikes.length ? (
+                    <Select id="sg-strike" value={f.strike} onChange={set('strike')}>
+                      {strikes.map((k) => (
+                        <option key={k} value={String(k)}>
+                          {k}
+                        </option>
+                      ))}
+                    </Select>
+                  ) : (
+                    <Input id="sg-strike" type="number" min={0} step="any" inputMode="decimal" value={f.strike} onChange={set('strike')} />
+                  )}
                 </Field>
               ) : null}
             </div>
@@ -245,6 +342,9 @@ export function SignalForm({ strategies }: { strategies: StrategyView[] }) {
                 <span className="text-muted-foreground">Instrument</span>
                 <span className="font-mono font-medium">{inst ? `${inst.exchange}:${inst.symbol}` : '—'}</span>
                 <span className="text-xs text-muted-foreground">LTP {ltp != null ? formatINR(ltp) : 'waiting for feed…'}</span>
+                <span className={cn('text-xs font-medium', openNet > 0 ? 'text-success' : openNet < 0 ? 'text-destructive' : 'text-muted-foreground')}>
+                  {openNet === 0 ? 'No open position' : `Open: ${openNet > 0 ? 'BUY' : 'SELL'} ${Math.abs(openNet)}${lotSize > 1 ? ` (${Math.abs(openNet) / lotSize} lot)` : ''}`}
+                </span>
               </div>
             </div>
 
@@ -265,10 +365,10 @@ export function SignalForm({ strategies }: { strategies: StrategyView[] }) {
 
             <div className="flex gap-3">
               <Button type="button" className="min-w-24 bg-emerald-600 text-white hover:bg-emerald-700" disabled={place.isPending} onClick={() => submit('BUY')}>
-                Buy
+                {openNet < 0 ? 'Buy (exit)' : 'Buy'}
               </Button>
               <Button type="button" variant="destructive" className="min-w-24" disabled={place.isPending} onClick={() => submit('SELL')}>
-                Sell
+                {openNet > 0 ? 'Sell (exit)' : 'Sell'}
               </Button>
               {place.isPending ? <span className="self-center text-sm text-muted-foreground">Sending…</span> : null}
             </div>

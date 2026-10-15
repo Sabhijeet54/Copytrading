@@ -72,8 +72,8 @@ export default function PositionsPage() {
         </Card>
 
         {portfolio.isLoading ? <p className="text-sm text-muted-foreground">Loading live data…</p> : null}
-        {p && p.paperPositions.length > 0 ? <PaperPositionsCard rows={p.paperPositions} canExit inlineClosed /> : null}
-        {p?.live.map((a) => <LivePositionsCard key={a.accountId} a={a} canExit />)}
+        {p && p.paperPositions.length > 0 ? <PaperPositionsCard rows={p.paperPositions} inlineClosed /> : null}
+        {p?.live.map((a) => <LivePositionsCard key={a.accountId} a={a} />)}
         {p && p.live.length === 0 && p.paperPositions.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No positions today. Connect your broker on the{' '}

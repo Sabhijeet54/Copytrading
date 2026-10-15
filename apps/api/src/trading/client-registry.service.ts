@@ -340,16 +340,22 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
     }
   }
 
-  /** Once per IST day: trade counts + net positions from today's rows (survives restarts). */
+  /**
+   * Once per IST day: trade counts (today) + net positions (survives restarts). Net positions start from the
+   * oldest still-OPEN signal, so a carry-forward (NRML) BUY from an earlier day is still known: the master's
+   * SELL next day exits it instead of opening an opposite (short) trade for every client.
+   */
   private async seedDay(): Promise<void> {
-    const since = startOfTradingDayIST();
+    const today = startOfTradingDayIST();
+    const oldestOpen = await this.prisma.masterTrade.findFirst({ where: { signalStatus: 'OPEN', createdAt: { lt: today } }, orderBy: { createdAt: 'asc' }, select: { createdAt: true } });
+    const since = oldestOpen ? oldestOpen.createdAt : today;
     const [orders, masters] = await Promise.all([
       this.prisma.copyOrder.findMany({
         where: {
           createdAt: { gte: since },
           OR: [{ status: { in: ['SUBMITTED', 'OPEN', 'PARTIALLY_FILLED', 'FILLED'] } }, { status: { in: ['CANCELLED', 'REJECTED'] }, filledQuantity: { gt: 0 } }],
         },
-        select: { strategyFollowerId: true, exchange: true, symbol: true, productType: true, side: true, quantity: true, filledQuantity: true, status: true, mirrored: true },
+        select: { strategyFollowerId: true, exchange: true, symbol: true, productType: true, side: true, quantity: true, filledQuantity: true, status: true, mirrored: true, createdAt: true },
       }),
       this.prisma.masterTrade.findMany({
         where: {
@@ -364,7 +370,7 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
     this.masterNet.clear();
     this.days.clear();
     for (const o of orders) {
-      if (!o.mirrored) this.day(o.strategyFollowerId).trades++;
+      if (!o.mirrored && o.createdAt >= today) this.day(o.strategyFollowerId).trades++;
       // Mirrored SL/target orders count only when filled; a normal order still pending counts in full.
       const pendingNormal = !o.mirrored && (o.status === 'SUBMITTED' || o.status === 'OPEN' || o.status === 'PARTIALLY_FILLED');
       const q = pendingNormal ? o.quantity : o.filledQuantity;

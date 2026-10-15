@@ -496,3 +496,32 @@ export const useClientDirectory = (scope: 'master' | 'admin', search: string, st
     enabled,
     placeholderData: (prev) => prev,
   });
+
+// ------------------------------------------------------------ F&O contract list (master order form)
+
+export type FnoExchange = 'NFO' | 'BFO' | 'MCX';
+export interface FnoScript {
+  name: string;
+  lotSize: number;
+  nearestExpiry: string | null;
+}
+export interface FnoChain {
+  name: string;
+  lotSize: number | null;
+  expiries: { date: string; lotSize: number; monthly: boolean; strikes: number[] }[];
+}
+export const useFnoScripts = (exchange: FnoExchange | null, q: string) =>
+  useQuery({
+    queryKey: ['master', 'fno-scripts', exchange, q.trim().toUpperCase()],
+    queryFn: () => api<FnoScript[]>('/master/fno/scripts', { query: { exchange: exchange!, q: q.trim() } }),
+    enabled: !!exchange,
+    staleTime: 10 * 60_000,
+    placeholderData: (prev) => prev,
+  });
+export const useFnoChain = (exchange: FnoExchange | null, name: string, kind: 'OPT' | 'FUT') =>
+  useQuery({
+    queryKey: ['master', 'fno-chain', exchange, name.trim().toUpperCase(), kind],
+    queryFn: () => api<FnoChain>('/master/fno/chain', { query: { exchange: exchange!, name: name.trim(), kind } }),
+    enabled: !!exchange && name.trim().length > 0,
+    staleTime: 10 * 60_000,
+  });
