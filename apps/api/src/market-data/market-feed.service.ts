@@ -41,6 +41,7 @@ export class MarketFeedService implements OnApplicationBootstrap, OnModuleDestro
   private kite?: KiteTicker;
   private angel?: AngelFeed;
   private angelAdapter?: AngelOneAdapter;
+  private readonly missingLogged = new Set<string>();
   private account?: BrokerAccount;
   private state: MarketFeedStatus['state'] = 'STOPPED';
   private error: string | null = null;
@@ -278,7 +279,13 @@ export class MarketFeedService implements OnApplicationBootstrap, OnModuleDestro
       for (const k of keys) {
         const [ex, ...rest] = k.split(':');
         const inst = this.instruments.get(ex!, rest.join(':'));
-        if (!inst) continue;
+        if (!inst) {
+          if (!this.missingLogged.has(k)) {
+            this.missingLogged.add(k);
+            this.logger.warn(`Kite feed: no instrument for ${k} (not in today's Zerodha ${ex} list)`);
+          }
+          continue;
+        }
         this.tokenToKey.set(`Z:${inst.token}`, k);
         this.subscribed.add(k);
         toks.push(inst.token);

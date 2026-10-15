@@ -1,5 +1,6 @@
 import type { Exchange, OrderStatus, OrderType, ProductType } from '@ctp/database';
-import { normalizeBrokerSymbol, symbolVariants } from './symbols';
+import { DERIVATIVE_EXCHANGES, normalizeBrokerSymbol, symbolVariants } from './symbols';
+import { angelScripMaster } from '../market-data/angel-scrip-master';
 import { BrokerApiError, brokerFetch } from '../brokers/broker-http';
 import { Throttle } from '../brokers/throttle';
 import {
@@ -160,7 +161,17 @@ export class AngelOneAdapter implements BrokerAdapter {
   private async lookup(exchange: Exchange, symbol: string): Promise<{ symbol: string; token: string }> {
     const sym = symbol.toUpperCase();
     const key = `${exchange}:${sym}`;
-    // BSE (BFO) / weekly contracts are named differently at Angel (e.g. SENSEX26O1573800CE) — try every variant.
+    // F&O: exact contract from Angel's own scrip master (BSE / weekly names differ from the platform's).
+    if (DERIVATIVE_EXCHANGES.has(exchange)) {
+      await angelScripMaster.ensure().catch(() => undefined);
+      const c = angelScripMaster.get(exchange, sym);
+      if (c) {
+        const out = { symbol: c.symbol, token: c.token };
+        AngelOneAdapter.tokenCache.set(key, out);
+        return out;
+      }
+    }
+    // Fallback: searchScrip with every naming variant.
     let pick: { tradingsymbol: string; symboltoken: string } | undefined;
     for (const v of symbolVariants(sym)) {
       const base = canonicalSymbol(v);

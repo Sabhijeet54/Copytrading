@@ -79,7 +79,7 @@ export default function AdminOverviewPage() {
         </div>
       ) : null}
 
-      <div className="mb-3 grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <div className="fox-tiles mb-3 grid grid-cols-2 gap-3 lg:grid-cols-5">
         <StatCard label="Total users" value={formatNumber(s?.totalUsers)} loading={loading} icon={<Users />} />
         <StatCard
           label="This month"

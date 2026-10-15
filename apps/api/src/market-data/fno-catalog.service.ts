@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { fetch as undiciFetch } from 'undici';
+import { angelScripMaster } from './angel-scrip-master';
 
 /** One expiry of one underlying. */
 interface ExpiryInfo {
@@ -14,8 +15,6 @@ export const FNO_EXCHANGES = ['NFO', 'BFO', 'MCX'] as const;
 export type FnoExchange = (typeof FNO_EXCHANGES)[number];
 
 const istDay = () => new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
-const MON: Record<string, string> = { JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06', JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12' };
-const ANGEL_SCRIP_MASTER = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json';
 
 /**
  * Full F&O contract list (index + stock options / futures, MCX) for the master's order form: every
@@ -31,7 +30,6 @@ export class FnoCatalogService {
   private readonly loadedDay = new Map<string, string>();
   private loading = new Map<string, Promise<void>>();
   private angelDay: string | null = null;
-  private angelLoading?: Promise<void>;
 
   /** Underlyings matching `q` (prefix first), with lot size and nearest expiry. */
   async scripts(exchange: FnoExchange, q: string, limit = 50) {
@@ -40,7 +38,7 @@ export class FnoCatalogService {
     const today = istDay();
     const out: { name: string; lotSize: number; nearestExpiry: string | null }[] = [];
     for (const [name, exp] of book) {
-      if (term && !name.includes(term)) continue;
+      if (term && !name.startsWith(term)) continue;
       const live = [...exp.keys()].filter((d) => d >= today).sort();
       if (!live.length) continue;
       out.push({ name, lotSize: exp.get(live[0]!)!.lotSize, nearestExpiry: live[0]! });
@@ -134,34 +132,21 @@ export class FnoCatalogService {
     this.logger.log(`Loaded ${book.size} ${exchange} underlyings (Zerodha list)`);
   }
 
-  /** One JSON for every exchange; fills all F&O books at once. */
+  /** Angel One scrip master (one JSON for every exchange); fills all F&O books at once. */
   private async loadAngel(): Promise<void> {
     if (this.angelDay === istDay()) return;
-    this.angelLoading ??= (async () => {
-      const res = await undiciFetch(ANGEL_SCRIP_MASTER, { signal: AbortSignal.timeout(90_000) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const rows = (await res.json()) as { name?: string; expiry?: string; strike?: string; lotsize?: string; instrumenttype?: string; exch_seg?: string }[];
-      const books = new Map<string, Book>(FNO_EXCHANGES.map((e) => [e, new Map()]));
-      for (const r of rows) {
-        const book = books.get(r.exch_seg ?? '');
-        if (!book || !r.instrumenttype || !r.expiry) continue;
-        const m = /^(\d{2})([A-Z]{3})(\d{4})$/.exec(r.expiry.toUpperCase());
-        if (!m || !MON[m[2]!]) continue;
-        const expiry = `${m[3]}-${MON[m[2]!]}-${m[1]}`;
-        const fut = r.instrumenttype.startsWith('FUT');
-        const opt = r.instrumenttype.startsWith('OPT');
-        if (!fut && !opt) continue;
-        // Angel strikes are in paise (× 100).
-        this.add(book, (r.name ?? '').trim().toUpperCase(), expiry, fut ? 'FUT' : 'CE', fut ? 0 : Number(r.strike) / 100, Number(r.lotsize) || 1);
-      }
-      for (const [ex, book] of books) {
-        if (!book.size) continue;
-        this.books.set(ex, book);
-        this.loadedDay.set(ex, istDay());
-        this.logger.log(`Loaded ${book.size} ${ex} underlyings (Angel One scrip master)`);
-      }
-      this.angelDay = istDay();
-    })().finally(() => (this.angelLoading = undefined));
-    return this.angelLoading;
+    await angelScripMaster.ensure();
+    const books = new Map<string, Book>(FNO_EXCHANGES.map((e) => [e, new Map()]));
+    for (const c of angelScripMaster.contracts) {
+      const book = books.get(c.exchange);
+      if (book) this.add(book, c.name, c.expiry, c.type, c.strike, c.lotSize);
+    }
+    for (const [ex, book] of books) {
+      if (!book.size) continue;
+      this.books.set(ex, book);
+      this.loadedDay.set(ex, istDay());
+      this.logger.log(`Loaded ${book.size} ${ex} underlyings (Angel One scrip master)`);
+    }
+    this.angelDay = istDay();
   }
 }

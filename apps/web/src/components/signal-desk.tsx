@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import type { StrategyView } from '@ctp/types';
 import { ExitButton, Pnl } from '@/components/live-account';
+import { ScriptCombobox } from '@/components/script-combobox';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -107,6 +108,19 @@ export function SignalForm({ strategies }: { strategies: StrategyView[] }) {
     if (lot) setF((p) => (p.lotSize ? p : { ...p, lotSize: lot }));
   }, [f.script]);
 
+  // Only the segments the selected strategy allows (its "Allowed exchanges"); none set = all.
+  const strategy = active.find((x) => x.id === f.strategyId);
+  const segments = SEGMENTS.filter((x) => {
+    const allowed = strategy?.allowedExchanges ?? [];
+    if (!allowed.length) return true;
+    const [v, k] = x.value.split(':');
+    const ex = k === 'EQ' ? v : v === 'NSE' ? 'NFO' : v === 'BSE' ? 'BFO' : 'MCX';
+    return allowed.includes(ex as never);
+  });
+  useEffect(() => {
+    if (segments.length && !segments.some((x) => x.value === f.segment)) setF((p) => ({ ...p, segment: segments[0]!.value, expiry: '', strike: '' }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [f.strategyId, segments.length]);
   const kind = f.segment.split(':')[1] as 'EQ' | 'FUT' | 'OPT';
   const derivative = kind !== 'EQ';
 
@@ -218,27 +232,18 @@ export function SignalForm({ strategies }: { strategies: StrategyView[] }) {
                 </Select>
               </Field>
               <Field label="Script" htmlFor="sg-script">
-                <Input
+                <ScriptCombobox
                   id="sg-script"
-                  list={fnoEx ? 'sg-script-list' : undefined}
                   value={f.script}
-                  onChange={(e) => setF((p) => ({ ...p, script: e.target.value.toUpperCase(), lotSize: rememberedLot(e.target.value), expiry: '', strike: '' }))}
-                  autoComplete="off"
-                  placeholder={fnoEx ? 'Type: NIFTY, RELIANCE, SENSEX…' : 'e.g. SBIN'}
+                  onChange={(v) => setF((p) => ({ ...p, script: v, lotSize: rememberedLot(v), expiry: '', strike: '' }))}
+                  options={fnoEx ? (scripts.data ?? []) : null}
+                  loading={scripts.isFetching}
+                  placeholder={fnoEx ? 'Type R → RELIANCE, S → SENSEX…' : 'e.g. SBIN'}
                 />
-                {fnoEx ? (
-                  <datalist id="sg-script-list">
-                    {(scripts.data ?? []).map((x) => (
-                      <option key={x.name} value={x.name}>
-                        {`lot ${x.lotSize}${x.nearestExpiry ? ` · next expiry ${x.nearestExpiry}` : ''}`}
-                      </option>
-                    ))}
-                  </datalist>
-                ) : null}
               </Field>
               <Field label="Segment" htmlFor="sg-seg">
                 <Select id="sg-seg" value={f.segment} onChange={set('segment')}>
-                  {SEGMENTS.map((x) => (
+                  {segments.map((x) => (
                     <option key={x.value} value={x.value}>
                       {x.label}
                     </option>

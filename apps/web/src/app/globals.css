@@ -4,59 +4,42 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  --radius: 0.5rem;
-  --background: oklch(0.985 0.002 247);
-  --foreground: oklch(0.21 0.02 255);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.21 0.02 255);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.21 0.02 255);
-  --primary: oklch(0.42 0.085 200);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.955 0.005 247);
-  --secondary-foreground: oklch(0.25 0.02 255);
-  --muted: oklch(0.955 0.005 247);
-  --muted-foreground: oklch(0.52 0.02 255);
-  --accent: oklch(0.95 0.012 200);
-  --accent-foreground: oklch(0.3 0.06 200);
-  --destructive: oklch(0.56 0.2 25);
-  --destructive-foreground: oklch(0.985 0 0);
-  --success: oklch(0.55 0.13 155);
-  --warning: oklch(0.72 0.15 75);
-  --border: oklch(0.91 0.006 247);
-  --input: oklch(0.89 0.008 247);
-  --ring: oklch(0.42 0.085 200);
-  --sidebar: oklch(0.2 0.02 245);
-  --sidebar-foreground: oklch(0.9 0.01 245);
-  --sidebar-muted: oklch(0.65 0.02 245);
-  --sidebar-accent: oklch(0.27 0.025 245);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: oklch(0.17 0.015 250);
-    --foreground: oklch(0.94 0.005 250);
-    --card: oklch(0.205 0.018 250);
-    --card-foreground: oklch(0.94 0.005 250);
-    --popover: oklch(0.205 0.018 250);
-    --popover-foreground: oklch(0.94 0.005 250);
-    --primary: oklch(0.72 0.11 195);
-    --primary-foreground: oklch(0.18 0.02 250);
-    --secondary: oklch(0.26 0.018 250);
-    --secondary-foreground: oklch(0.94 0.005 250);
-    --muted: oklch(0.26 0.018 250);
-    --muted-foreground: oklch(0.7 0.015 250);
-    --accent: oklch(0.28 0.03 200);
-    --accent-foreground: oklch(0.9 0.04 195);
-    --destructive: oklch(0.65 0.19 25);
-    --success: oklch(0.7 0.14 155);
-    --warning: oklch(0.8 0.14 80);
-    --border: oklch(0.3 0.015 250);
-    --input: oklch(0.32 0.015 250);
-    --ring: oklch(0.72 0.11 195);
-    --sidebar: oklch(0.14 0.015 250);
-    --sidebar-accent: oklch(0.22 0.02 250);
-  }
+  /* Foxstocks theme (Figma "Fox stocks Dashboard"): lavender frame, white rounded panels, violet #6425FE,
+     pastel tiles mint #A6F7E2 · sand #FFE5A5 · sky #9EC6FA, ink #2B2B2B. Light only. */
+  --radius: 0.875rem;
+  --frame: #e9e4ff;
+  --background: #f6f5fb;
+  --foreground: #1d1b2c;
+  --card: #ffffff;
+  --card-foreground: #1d1b2c;
+  --popover: #ffffff;
+  --popover-foreground: #1d1b2c;
+  --primary: #6425fe;
+  --primary-foreground: #ffffff;
+  --secondary: #f1eefb;
+  --secondary-foreground: #2b2b2b;
+  --muted: #f3f1fa;
+  --muted-foreground: #77748a;
+  --accent: #ede7ff;
+  --accent-foreground: #4b16d9;
+  --destructive: #e5484d;
+  --destructive-foreground: #ffffff;
+  --success: #16a34a;
+  --warning: #d48a06;
+  --border: #ebe8f4;
+  --input: #e2deef;
+  --ring: #6425fe;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #55526a;
+  --sidebar-muted: #9e9bb0;
+  --sidebar-accent: #ede7ff;
+  --sidebar-active: #4b16d9;
+  --tile-mint: #a6f7e2;
+  --tile-violet: #c9b6ff;
+  --tile-sand: #ffe5a5;
+  --tile-lime: #c9f59a;
+  --tile-sky: #9ec6fa;
+  --ink: #2b2b2b;
 }
 
 @theme inline {
@@ -87,6 +70,9 @@
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-muted: var(--sidebar-muted);
   --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-frame: var(--frame);
+  --color-ink: var(--ink);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -104,4 +90,32 @@
   .tabular {
     font-variant-numeric: tabular-nums;
   }
+  html {
+    color-scheme: light;
+  }
 }
+
+/* Pastel KPI tiles like the Foxstocks "My Stocks" row: put .fox-tiles on a grid of stat cards. */
+  .fox-tiles > :nth-child(5n + 1) {
+    background: var(--tile-mint);
+    border-color: transparent;
+  }
+  .fox-tiles > :nth-child(5n + 2) {
+    background: var(--tile-violet);
+    border-color: transparent;
+  }
+  .fox-tiles > :nth-child(5n + 3) {
+    background: var(--tile-sand);
+    border-color: transparent;
+  }
+  .fox-tiles > :nth-child(5n + 4) {
+    background: var(--tile-lime);
+    border-color: transparent;
+  }
+  .fox-tiles > :nth-child(5n + 5) {
+    background: var(--tile-sky);
+    border-color: transparent;
+  }
+  .fox-tiles > * :where(.text-muted-foreground) {
+    color: color-mix(in oklab, var(--ink) 65%, transparent);
+  }
