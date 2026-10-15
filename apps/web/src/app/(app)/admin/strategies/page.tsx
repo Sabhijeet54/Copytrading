@@ -33,7 +33,7 @@ function FollowersDialog({ strategy, onClose }: { strategy: { id: string; name: 
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>{strategy?.name} — followers</DialogTitle>
-            <DialogDescription>Subscriptions and their copy status.</DialogDescription>
+            <DialogDescription>Clients who have this strategy and their copy status. Assign or remove strategies per client on the Users page.</DialogDescription>
           </DialogHeader>
           <div className="max-h-[60vh] overflow-y-auto">
             {q.isLoading ? (
@@ -49,8 +49,13 @@ function FollowersDialog({ strategy, onClose }: { strategy: { id: string; name: 
                         {f.followerName}
                       </Link>
                       <p className="text-muted-foreground">
-                        {formatINR(f.allocationAmount)} · {humanize(f.allocationMode)}
-                        {f.allocationPercent ? ` ${Number(f.allocationPercent)}%` : ''}
+                        {f.allocationMode === 'CAPITAL_PERCENTAGE'
+                          ? `${+(Number(f.allocationPercent ?? 0) / 100).toFixed(2)}× lots`
+                          : f.allocationMode === 'FIXED_QUANTITY'
+                            ? f.fixedLots
+                              ? `${f.fixedLots} lot(s)`
+                              : `${f.fixedQuantity ?? 0} qty`
+                            : `${formatINR(f.allocationAmount)} capital`}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -96,7 +101,7 @@ export default function AdminStrategiesPage() {
 
   return (
     <>
-      <PageHeader title="Strategies" description="Master strategies and their follower counts." />
+      <PageHeader title="Strategies" description="Master strategies and their client counts. Give a strategy to a client from Users → Strategies." />
       <Card className="overflow-hidden">
         <FilterBar onReset={list.reset} active={list.active}>
           <Field label="Search" className="grid w-56 gap-1.5">

@@ -228,7 +228,7 @@ export class BrokerSessionService {
         data: {
           brokerClientId: s.brokerClientId,
           status: 'CONNECTED',
-          isPaper: false,
+          // isPaper is the client's paper / live switch — a daily re-login must not flip it.
           mode,
           tokenExpiresAt: s.expiresAt,
           lastConnectedAt: now,

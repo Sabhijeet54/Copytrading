@@ -5,6 +5,7 @@ import {
   ArrowLeftRight,
   BarChart3,
   Briefcase,
+  Building2,
   CandlestickChart,
   ChevronsLeft,
   ChevronsRight,
@@ -40,31 +41,37 @@ interface NavItem {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
+  /** Active only on exactly this path (not on sub-pages). */
   exact?: boolean;
+  /** Other paths that highlight this item (e.g. a detail page). */
+  also?: string[];
 }
 interface NavSection {
   title: string;
   items: NavItem[];
 }
 
-/** Role-based menus. Every link points to a page/section that exists — no dead links. */
+/**
+ * Role-based menus. Every item opens its OWN page (no in-page scrolling to #anchors), so each screen shows
+ * one thing clearly.
+ */
 const MENUS: Record<Role, NavSection[]> = {
   MASTER: [
     {
       title: 'Workspace',
       items: [
         { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { href: '/master#trades', label: 'Live trades', icon: CandlestickChart },
-        { href: '/master#positions', label: 'Open positions', icon: Briefcase },
-        { href: '/master#clients', label: 'Followers / clients', icon: Users },
-        { href: '/master#strategies', label: 'Strategies', icon: Layers },
-        { href: '/master#place-trade', label: 'Place trade', icon: PlusCircle },
+        { href: '/master', label: 'Strategies', icon: Layers, exact: true },
+        { href: '/master/place-trade', label: 'Place trade', icon: PlusCircle },
+        { href: '/master/trades', label: 'Live trades', icon: CandlestickChart },
+        { href: '/master/positions', label: 'Open positions', icon: Briefcase },
+        { href: '/master/clients', label: 'Clients', icon: Users, also: ['/master/client'] },
       ],
     },
     {
       title: 'Configuration',
       items: [
-        { href: '/dashboard#broker', label: 'Broker accounts', icon: Wallet },
+        { href: '/broker', label: 'Broker accounts', icon: Wallet },
         { href: '/settings', label: 'Profile & settings', icon: Settings },
       ],
     },
@@ -74,16 +81,17 @@ const MENUS: Record<Role, NavSection[]> = {
       title: 'Workspace',
       items: [
         { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { href: '/portfolio#copy-trading', label: 'Copy trading', icon: Copy },
-        { href: '/portfolio#positions', label: 'Live positions', icon: Briefcase },
-        { href: '/portfolio#orders', label: 'My orders', icon: ListOrdered },
+        { href: '/portfolio', label: 'My strategies', icon: Copy, exact: true },
+        { href: '/portfolio/positions', label: 'Positions', icon: Briefcase },
+        { href: '/portfolio/holdings', label: 'Holdings', icon: Wallet },
+        { href: '/portfolio/orders', label: "Today's orders", icon: ListOrdered },
       ],
     },
     {
       title: 'Configuration',
       items: [
         { href: '/broker-api', label: 'Broker API', icon: KeyRound },
-        { href: '/dashboard#broker', label: 'Broker connection', icon: Wallet },
+        { href: '/broker', label: 'Broker connection', icon: Building2 },
         { href: '/settings', label: 'Account settings', icon: Settings },
       ],
     },
@@ -93,9 +101,9 @@ const MENUS: Record<Role, NavSection[]> = {
       title: 'Workspace',
       items: [
         { href: '/admin', label: 'Overview', icon: ShieldCheck, exact: true },
-        { href: '/admin/users', label: 'Users & roles', icon: Users },
-        { href: '/admin/strategies', label: 'Strategies / mapping', icon: Layers },
-        { href: '/admin/signals', label: 'Signals', icon: Radio },
+        { href: '/admin/users', label: 'Users & licences', icon: Users },
+        { href: '/admin/strategies', label: 'Strategies', icon: Layers },
+        { href: '/admin/signals', label: 'Trade history', icon: Radio },
         { href: '/admin/master-trades', label: 'Master orders', icon: BarChart3 },
         { href: '/admin/copy-orders', label: 'Client copied orders', icon: ArrowLeftRight },
         { href: '/admin/positions', label: 'Positions', icon: Briefcase },
@@ -124,22 +132,10 @@ function marketOpenNow(now = new Date()): boolean {
   return m >= 9 * 60 + 15 && m < 15 * 60 + 30;
 }
 
-function useHash(): string {
-  const [hash, setHash] = useState('');
-  useEffect(() => {
-    const read = () => setHash(window.location.hash);
-    read();
-    window.addEventListener('hashchange', read);
-    return () => window.removeEventListener('hashchange', read);
-  }, []);
-  return hash;
-}
-
-function isActive(pathname: string, hash: string, item: NavItem): boolean {
-  const [path, frag] = item.href.split('#');
-  if (frag) return pathname === path && hash === `#${frag}`;
-  if (item.exact) return pathname === path;
-  return (pathname === path || pathname.startsWith(`${path}/`)) && !hash;
+function isActive(pathname: string, item: NavItem): boolean {
+  if (item.also?.some((p) => pathname === p || pathname.startsWith(`${p}/`))) return true;
+  if (item.exact) return pathname === item.href;
+  return pathname === item.href || pathname.startsWith(`${item.href}/`);
 }
 
 function Dot({ tone }: { tone: 'ok' | 'warn' | 'bad' | 'idle' }) {
@@ -181,7 +177,6 @@ function useStatus(user: AuthUser) {
 
 export function AppShell({ user, children }: { user: AuthUser; children: React.ReactNode }) {
   const pathname = usePathname();
-  const hash = useHash();
   const router = useRouter();
   const logout = useLogout();
   const status = useStatus(user);
@@ -196,7 +191,7 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
       /* storage unavailable */
     }
   }, []);
-  useEffect(() => setMobileOpen(false), [pathname, hash]);
+  useEffect(() => setMobileOpen(false), [pathname]);
 
   const toggleCollapsed = () => {
     setCollapsed((c) => {
@@ -249,7 +244,7 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
           <div key={section.title} className="flex flex-col gap-0.5">
             {!mini ? <p className="px-2 pb-1 text-[11px] font-medium uppercase tracking-wider text-sidebar-muted">{section.title}</p> : <div className="mx-2 mb-1 border-t border-sidebar-accent" />}
             {section.items.map((item) => {
-              const active = isActive(pathname, hash, item);
+              const active = isActive(pathname, item);
               const Icon = item.icon;
               return (
                 <Link

@@ -60,7 +60,7 @@ export type FollowerRow = StrategyFollowerView & {
   paperRealizedPnl: string;
   paperUnrealizedPnl: string;
 };
-export type StrategyWithSub = StrategyView & { subscription: StrategyFollowerView | null };
+export type StrategyWithSub = StrategyView & { subscription: StrategyFollowerView | null; allocationLabel?: string | null };
 
 export interface StrategyInput {
   name: string;
@@ -174,15 +174,23 @@ export function useExitSignalBook() {
   });
 }
 
-export interface AssignClientInput {
-  email: string;
+export interface AssignStrategyInput {
+  brokerAccountId?: string;
   allocationMode: 'FIXED_QUANTITY' | 'CAPITAL_PERCENTAGE' | 'PROPORTIONAL';
   fixedQuantity?: number;
   fixedLots?: number;
   allocationPercent?: number;
   allocationAmount?: number;
   maxDailyLoss?: number;
+  maxLots?: number;
+  maxQuantity?: number;
+  maxTradeValue?: number;
+  maxTradesPerDay?: number;
+  allowedSegments?: ('EQ' | 'FO')[];
   startCopy?: boolean;
+}
+export interface AssignClientInput extends AssignStrategyInput {
+  email: string;
 }
 
 export function useAssignClient(strategyId: string, scope: 'master' | 'admin' = 'master') {
@@ -231,12 +239,24 @@ export function usePlaceMasterOrder() {
 
 // -------------------------------------------------------------- follower
 export const useFollowStrategies = () => useQuery({ queryKey: ['follow', 'strategies'], queryFn: () => api<StrategyWithSub[]>('/follow/strategies') });
+export type CopyOrderRow = CopyOrderView & { strategyName?: string };
 export const usePortfolio = () =>
   useQuery({
     queryKey: ['follow', 'portfolio'],
-    queryFn: () => api<{ paperMode: boolean; live: LiveAccount[]; paperPositions: PaperPosition[]; copyOrders: CopyOrderView[] }>('/follow/portfolio'),
+    queryFn: () =>
+      api<{ paperMode: boolean; todayPnl: number; live: LiveAccount[]; paperPositions: PaperPosition[]; copyOrders: CopyOrderRow[] }>('/follow/portfolio'),
     refetchInterval: LIVE_MS,
   });
+export function useSetTradingMode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (mode: 'PAPER' | 'LIVE') => api<{ mode: 'PAPER' | 'LIVE' }>('/follow/trading-mode', { method: 'POST', body: { mode } }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['client-dashboard'] });
+      void qc.invalidateQueries({ queryKey: ['follow'] });
+    },
+  });
+}
 export function useFollow() {
   const qc = useQueryClient();
   return useMutation({
@@ -359,3 +379,103 @@ export const useAdminSignals = (p: { from: string; to: string; strategyIds: stri
       api<AdminSignalRow[]>('/admin/signals', { query: { from: p.from, to: p.to, status: p.status, strategyIds: p.strategyIds.join(',') || undefined } }),
     refetchInterval: 5_000,
   });
+
+// ------------------------------------------------------------ master: clients
+
+export type LicenceState = 'NONE' | 'ACTIVE' | 'EXPIRING' | 'EXPIRED';
+export interface MasterClientRow {
+  userId: string;
+  name: string;
+  email: string;
+  mobile: string | null;
+  status: string;
+  licenceExpiresAt: string | null;
+  licenceStatus: LicenceState;
+  broker: (BrokerAccountView & { simulated: boolean }) | null;
+  todayPnl: number;
+  todayTrades: number;
+  subscriptions: { followerId: string; strategyId: string; strategyName: string; copyStatus: 'ON' | 'OFF' | 'PAUSED'; allocation: string }[];
+}
+export interface StrategyDay {
+  followerId: string;
+  strategyId: string;
+  name: string;
+  copyStatus: 'ON' | 'OFF' | 'PAUSED';
+  allocation: string;
+  todayPnl: number;
+  todayTrades: number;
+}
+export type HistoryRange = 'today' | '7d' | '30d' | 'all';
+export interface MasterClientDetail {
+  profile: {
+    id: string;
+    name: string;
+    email: string;
+    mobile: string | null;
+    status: string;
+    createdAt: string;
+    lastLoginAt: string | null;
+    licenceDays: number | null;
+    licenceAssignedAt: string | null;
+    licenceExpiresAt: string | null;
+    licenceStatus: LicenceState;
+  };
+  brokerAccounts: (BrokerAccountView & { simulated: boolean })[];
+  todayPnl: number;
+  strategies: (StrategyFollowerView & { allocation: string; today: StrategyDay | null })[];
+  range: HistoryRange;
+  orders: CopyOrderRow[];
+}
+export const useMasterClients = () =>
+  useQuery({ queryKey: ['master', 'clients'], queryFn: () => api<MasterClientRow[]>('/master/clients'), refetchInterval: LIVE_MS });
+export const useMasterClient = (userId: string | null, range: HistoryRange) =>
+  useQuery({
+    queryKey: ['master', 'client-detail', userId, range],
+    queryFn: () => api<MasterClientDetail>(`/master/clients/${userId}`, { query: { range } }),
+    enabled: !!userId,
+    refetchInterval: LIVE_MS,
+  });
+
+// ------------------------------------------------------------ admin: strategy access per client
+
+export interface UserStrategyRow {
+  strategyId: string;
+  name: string;
+  masterName: string;
+  status: string;
+  assigned: boolean;
+  subscription: (StrategyFollowerView & { allocation: string }) | null;
+}
+export const useAdminUserStrategies = (userId: string | null) =>
+  useQuery({ queryKey: ['admin', 'user-strategies', userId], queryFn: () => api<UserStrategyRow[]>(`/admin/users/${userId}/strategies`), enabled: !!userId });
+
+export function useAdminUserStrategyMutations(userId: string) {
+  const qc = useQueryClient();
+  const done = () => void qc.invalidateQueries({ queryKey: ['admin'] });
+  return {
+    assign: useMutation({
+      mutationFn: ({ strategyId, body }: { strategyId: string; body: AssignStrategyInput }) =>
+        api<{ warning: string | null }>(`/admin/users/${userId}/strategies/${strategyId}`, { method: 'POST', body }),
+      onSuccess: done,
+    }),
+    remove: useMutation({
+      mutationFn: (strategyId: string) => api(`/admin/users/${userId}/strategies/${strategyId}/remove`, { method: 'POST' }),
+      onSuccess: done,
+    }),
+  };
+}
+
+// ------------------------------------------------------------ admin: trade history corrections
+
+export function useAdminSignalMutations() {
+  const qc = useQueryClient();
+  const done = () => void qc.invalidateQueries({ queryKey: ['admin-signals'] });
+  return {
+    edit: useMutation({
+      mutationFn: ({ id, ...body }: { id: string; entryPrice?: number; exitPrice?: number; quantity?: number }) =>
+        api<{ id: string; realizedPnl: number | null }>(`/admin/signals/${id}`, { method: 'PATCH', body }),
+      onSuccess: done,
+    }),
+    remove: useMutation({ mutationFn: (id: string) => api(`/admin/signals/${id}`, { method: 'DELETE' }), onSuccess: done }),
+  };
+}

@@ -246,6 +246,8 @@ export interface AdminUserListItem {
   licenceExpiresAt: IsoDate | null;
   /** NONE = no licence assigned, ACTIVE, EXPIRING (≤ 7 days), EXPIRED. */
   licenceStatus: 'NONE' | 'ACTIVE' | 'EXPIRING' | 'EXPIRED';
+  /** Strategies assigned to this client (users list only). */
+  assignedStrategies?: { id: string; name: string; copyStatus: CopyStatus }[];
 }
 
 export interface AdminUserDetail extends AdminUserListItem {

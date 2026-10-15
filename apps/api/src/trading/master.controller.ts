@@ -17,10 +17,12 @@ import { RiskService } from './risk.service';
 import { AccountEvents } from '../realtime/account-events';
 import { MarketFeedService } from '../market-data/market-feed.service';
 import { instrumentKey, PriceCacheService } from '../market-data/price-cache.service';
-import { AssignClientDto, ExitPositionDto, MasterOrderDto, SignalBookExitDto, SignalTpSlDto, StrategyDto, StrategyStatusDto } from './trading.dto';
+import { AssignClientDto, ClientHistoryQueryDto, ExitPositionDto, MasterOrderDto, SignalBookExitDto, SignalTpSlDto, StrategyDto, StrategyStatusDto } from './trading.dto';
 import { SignalService } from './signal.service';
 import { startOfTradingDayIST } from '../admin/admin.service';
 import { ClientAssignService } from './client-assign.service';
+import { allocationLabel, ClientSummaryService, isRemoved } from './client-summary.service';
+import { licenceStatus } from '../common/mappers';
 import { overlayLivePrices, paperPositionView } from './price-overlay';
 import { TradingService } from './trading.service';
 
@@ -41,6 +43,7 @@ export class MasterController {
     private readonly feed: MarketFeedService,
     private readonly assigner: ClientAssignService,
     private readonly signals: SignalService,
+    private readonly summary: ClientSummaryService,
   ) {}
 
   private async own(user: RequestUser, id: string): Promise<Strategy> {
@@ -140,7 +143,7 @@ export class MasterController {
       where: { strategyId: id },
       include: { follower: { select: { name: true, email: true, mobile: true } }, brokerAccount: true },
       orderBy: { createdAt: 'desc' },
-    });
+    }).then((r) => r.filter((x) => !isRemoved(x)));
     const pnl = await this.prisma.position.groupBy({
       by: ['userId'],
       where: { userId: { in: rows.map((r) => r.followerUserId) } },
@@ -189,6 +192,92 @@ export class MasterController {
       if (err instanceof BrokerApiError) throw new BadRequestException(await this.trading.handleBrokerError(account, err));
       throw err;
     }
+  }
+
+  /** Every client of my strategies (one row per client) with broker status, today's P&L and subscriptions. */
+  @Get('clients')
+  async clients(@CurrentUser() user: RequestUser) {
+    const subs = await this.prisma.strategyFollower.findMany({
+      where: { strategy: { masterUserId: user.id } },
+      include: {
+        strategy: { select: { name: true } },
+        follower: { select: { id: true, name: true, email: true, mobile: true, status: true, licenceExpiresAt: true } },
+        brokerAccount: true,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    const byUser = new Map<string, typeof subs>();
+    for (const s of subs) if (!isRemoved(s)) byUser.set(s.followerUserId, [...(byUser.get(s.followerUserId) ?? []), s]);
+    const out = await Promise.all(
+      [...byUser.entries()].map(async ([userId, list]) => {
+        const f = list[0]!.follower;
+        const account = list.find((x) => x.brokerAccount)?.brokerAccount ?? null;
+        const day = await this.summary.today(userId, user.id);
+        return {
+          userId,
+          name: f.name,
+          email: f.email,
+          mobile: f.mobile,
+          status: f.status,
+          licenceExpiresAt: f.licenceExpiresAt?.toISOString() ?? null,
+          licenceStatus: licenceStatus(f.licenceExpiresAt),
+          broker: account ? { ...toBrokerAccountView(account), simulated: this.trading.isSimulated(account) } : null,
+          todayPnl: day.todayPnl,
+          todayTrades: day.strategies.reduce((a, x) => a + x.todayTrades, 0),
+          subscriptions: list.map((x) => ({ followerId: x.id, strategyId: x.strategyId, strategyName: x.strategy.name, copyStatus: x.copyStatus, allocation: allocationLabel(x) })),
+        };
+      }),
+    );
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Full detail of one client for the master: profile, licence, broker, subscriptions to my strategies with
+   * today's P&L, and the copied-trade history of my strategies (`range` = today | 7d | 30d | all).
+   */
+  @Get('clients/:userId')
+  async client(@CurrentUser() user: RequestUser, @Param('userId') userId: string, @Query() q: ClientHistoryQueryDto) {
+    const subsAll = await this.prisma.strategyFollower.findMany({
+      where: { followerUserId: userId, strategy: { masterUserId: user.id } },
+      include: { strategy: { select: { name: true } }, brokerAccount: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!subsAll.length) throw new ForbiddenException('This client does not follow any of your strategies');
+    const range = q.range ?? 'today';
+    const since =
+      range === 'today' ? startOfTradingDayIST() : range === '7d' ? new Date(Date.now() - 7 * 86_400_000) : range === '30d' ? new Date(Date.now() - 30 * 86_400_000) : undefined;
+    const [u, accounts, day, orders] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, name: true, email: true, mobile: true, status: true, createdAt: true, lastLoginAt: true, licenceDays: true, licenceAssignedAt: true, licenceExpiresAt: true },
+      }),
+      this.prisma.brokerAccount.findMany({ where: { userId, broker: { not: 'MOCK' } }, orderBy: { createdAt: 'asc' } }),
+      this.summary.today(userId, user.id),
+      this.prisma.copyOrder.findMany({
+        where: { followerUserId: userId, strategyFollowerId: { in: subsAll.map((s) => s.id) }, ...(since ? { createdAt: { gte: since } } : {}) },
+        include: { strategyFollower: { select: { strategy: { select: { name: true } } } } },
+        orderBy: { createdAt: 'desc' },
+        take: 1000,
+      }),
+    ]);
+    if (!u) throw new NotFoundException('Client not found');
+    return {
+      profile: {
+        ...u,
+        createdAt: u.createdAt.toISOString(),
+        lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
+        licenceAssignedAt: u.licenceAssignedAt?.toISOString() ?? null,
+        licenceExpiresAt: u.licenceExpiresAt?.toISOString() ?? null,
+        licenceStatus: licenceStatus(u.licenceExpiresAt),
+      },
+      brokerAccounts: accounts.map((a) => ({ ...toBrokerAccountView(a), simulated: this.trading.isSimulated(a) })),
+      todayPnl: day.todayPnl,
+      strategies: subsAll
+        .filter((s) => !isRemoved(s))
+        .map((s) => ({ ...toStrategyFollowerView(s), allocation: allocationLabel(s), today: day.strategies.find((d) => d.followerId === s.id) ?? null })),
+      range,
+      orders: orders.map((c) => ({ ...toCopyOrderView(c), strategyName: c.strategyFollower.strategy.name })),
+    };
   }
 
   /** Live broker data of one of this master's followers (positions, holdings, orders, funds). */

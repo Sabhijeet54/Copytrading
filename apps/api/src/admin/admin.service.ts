@@ -33,6 +33,7 @@ import {
   toStrategyView,
   toSystemEventView,
 } from '../common/mappers';
+import { isRemoved } from '../trading/follower-access';
 import { PRISMA } from '../common/prisma/prisma.service';
 import { REDIS } from '../common/redis/redis.module';
 import { API_CONFIG, ApiConfig } from '../config/config.module';
@@ -166,14 +167,25 @@ export class AdminService {
     const [items, total] = await Promise.all([
       this.prisma.user.findMany({
         where,
-        include: { brokerAccounts: { select: { id: true, broker: true, status: true } } },
+        include: {
+          brokerAccounts: { select: { id: true, broker: true, status: true } },
+          follows: { select: { strategyId: true, copyStatus: true, stoppedReason: true, strategy: { select: { name: true } } } },
+        },
         orderBy: { createdAt: 'desc' },
         skip: q.skip,
         take: q.pageSize,
       }),
       this.prisma.user.count({ where }),
     ]);
-    return { items: items.map(toAdminUserListItem), total, page: q.page, pageSize: q.pageSize };
+    return {
+      items: items.map((u) => ({
+        ...toAdminUserListItem(u),
+        assignedStrategies: u.follows.filter((f) => !isRemoved(f)).map((f) => ({ id: f.strategyId, name: f.strategy.name, copyStatus: f.copyStatus })),
+      })),
+      total,
+      page: q.page,
+      pageSize: q.pageSize,
+    };
   }
 
   // ------------------------------------------------------------------ add / edit / licence
@@ -403,7 +415,7 @@ export class AdminService {
       include: { follower: { select: { name: true } }, strategy: { select: { name: true } } },
       orderBy: { createdAt: 'asc' },
     });
-    return follows.map(toStrategyFollowerView);
+    return follows.filter((f) => !isRemoved(f)).map(toStrategyFollowerView);
   }
 
   async pauseStrategy(admin: RequestUser, id: string, reason: string, client: ClientInfo): Promise<StrategyView> {

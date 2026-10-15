@@ -1,7 +1,7 @@
 'use client';
 
-import { Download, RefreshCw, RotateCcw, Target } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { Download, Pencil, RefreshCw, RotateCcw, Target, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { ExitButton, Pnl } from '@/components/live-account';
 import { PageHeader } from '@/components/page-header';
@@ -14,7 +14,8 @@ import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatINR, humanize } from '@/lib/format';
 import { useAdminStrategies } from '@/lib/queries';
-import { type AdminSignalRow, type SignalRow, useAdminSignals, useLtps, useSquareOffSignal } from '@/lib/trading';
+import { type AdminSignalRow, type SignalRow, useAdminSignalMutations, useAdminSignals, useLtps, useSquareOffSignal } from '@/lib/trading';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 
 const istDate = (offsetDays = 0) => new Date(Date.now() + 330 * 60_000 + offsetDays * 86_400_000).toISOString().slice(0, 10);
@@ -38,7 +39,7 @@ function exportCsv(rows: Row[], multiplier: number) {
       r.exchange,
       fmtDate(r.entryAt),
       r.side,
-      r.quantity,
+      r.quantity * multiplier,
       r.entryPrice,
       fmtTime(r.entryAt),
       r.exitPrice,
@@ -62,12 +63,126 @@ function exportCsv(rows: Row[], multiplier: number) {
   URL.revokeObjectURL(url);
 }
 
+function EditSignalDialog({ row, onClose }: { row: Row | null; onClose: () => void }) {
+  const { edit } = useAdminSignalMutations();
+  const [f, setF] = useState({ entry: '', exit: '', qty: '' });
+  useEffect(() => {
+    if (row) setF({ entry: row.entryPrice != null ? String(row.entryPrice) : '', exit: row.exitPrice != null ? String(row.exitPrice) : '', qty: String(row.quantity) });
+  }, [row]);
+  const num = (v: string) => (v.trim() === '' ? undefined : Number(v));
+  return (
+    <Dialog open={!!row} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Edit trade</DialogTitle>
+          <DialogDescription>
+            {row ? `${row.strategyName ?? ''} · ${row.side} ${row.symbol}` : ''} — corrects this trade in history and recalculates its P&amp;L. Client orders are not changed.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="grid gap-1.5">
+            <Label htmlFor="es-qty">Quantity</Label>
+            <Input id="es-qty" type="number" min={1} value={f.qty} onChange={(e) => setF({ ...f, qty: e.target.value })} />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="es-entry">Entry ₹</Label>
+            <Input id="es-entry" type="number" min={0} step="0.05" value={f.entry} onChange={(e) => setF({ ...f, entry: e.target.value })} />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="es-exit">Exit ₹</Label>
+            <Input id="es-exit" type="number" min={0} step="0.05" disabled={row?.exitPrice == null} value={f.exit} onChange={(e) => setF({ ...f, exit: e.target.value })} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            disabled={edit.isPending}
+            onClick={() =>
+              row &&
+              edit.mutate(
+                {
+                  id: row.id,
+                  entryPrice: num(f.entry),
+                  exitPrice: row.exitPrice != null ? num(f.exit) : undefined,
+                  quantity: num(f.qty) !== row.quantity ? num(f.qty) : undefined,
+                },
+                { onSuccess: () => (toast.success('Trade updated'), onClose()), onError: (e) => toast.error(e.message) },
+              )
+            }
+          >
+            {edit.isPending ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Past performance per strategy for the filtered period. */
+function PerformanceCard({ rows, mult }: { rows: Row[]; mult: number }) {
+  const by = new Map<string, { name: string; trades: number; closed: number; wins: number; pnl: number; best: number; worst: number }>();
+  for (const r of rows) {
+    const k = r.strategyId ?? 'none';
+    const cur = by.get(k) ?? { name: r.strategyName ?? '—', trades: 0, closed: 0, wins: 0, pnl: 0, best: -Infinity, worst: Infinity };
+    const pnl = r.pnl * mult;
+    cur.trades += 1;
+    cur.pnl += pnl;
+    if (r.status === 'CLOSED') {
+      cur.closed += 1;
+      if (pnl > 0) cur.wins += 1;
+      cur.best = Math.max(cur.best, pnl);
+      cur.worst = Math.min(cur.worst, pnl);
+    }
+    by.set(k, cur);
+  }
+  const list = [...by.values()].sort((a, b) => b.pnl - a.pnl);
+  if (!list.length) return null;
+  return (
+    <Card>
+      <CardContent className="overflow-x-auto pt-6">
+        <h2 className="mb-3 text-base font-semibold">Strategy performance (selected period)</h2>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Strategy</TableHead>
+              <TableHead className="text-right">Trades</TableHead>
+              <TableHead className="text-right">Win rate</TableHead>
+              <TableHead className="text-right">Best</TableHead>
+              <TableHead className="text-right">Worst</TableHead>
+              <TableHead className="text-right">Total P&amp;L</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {list.map((x) => (
+              <TableRow key={x.name}>
+                <TableCell className="font-medium">{x.name}</TableCell>
+                <TableCell className="text-right tabular-nums">{x.trades}</TableCell>
+                <TableCell className="text-right tabular-nums">{x.closed ? `${Math.round((x.wins / x.closed) * 100)}% (${x.wins}/${x.closed})` : '—'}</TableCell>
+                <TableCell className="text-right">{x.closed ? <Pnl value={x.best} /> : '—'}</TableCell>
+                <TableCell className="text-right">{x.closed ? <Pnl value={x.worst} /> : '—'}</TableCell>
+                <TableCell className="text-right font-semibold">
+                  <Pnl value={x.pnl} />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function AdminSignalsPage() {
   const defaults = { from: istDate(-7), to: istDate(), strategyIds: [] as string[], status: 'all' as 'all' | 'open' | 'closed' };
   const [draft, setDraft] = useState(defaults);
   const [applied, setApplied] = useState(defaults);
   const [multiplier, setMultiplier] = useState('1');
   const [tpslRow, setTpslRow] = useState<SignalRow | null>(null);
+  const [editRow, setEditRow] = useState<Row | null>(null);
+  const [deleteRow, setDeleteRow] = useState<Row | null>(null);
+  const { remove } = useAdminSignalMutations();
   const strategies = useAdminStrategies({ page: 1, pageSize: 100 });
   const q = useAdminSignals(applied);
   const squareOff = useSquareOffSignal('admin');
@@ -90,18 +205,18 @@ export default function AdminSignalsPage() {
   return (
     <>
       <PageHeader
-        title="Signals"
-        description="Every master signal with entry, exit, target / stop loss and P&L. Open signals stream live LTP."
+        title="Trade history"
+        description="Every trade of every strategy — past performance with entry, exit, target / stop loss and P&L. Open trades stream live LTP."
         actions={
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <label className="flex items-center gap-2 text-muted-foreground" htmlFor="pnl-mult">
-              PNL multiplier
+              <span title="Scales quantity and P&L shown (e.g. 2 = results for 2× lots). Display only.">Lot multiplier ×</span>
               <Input id="pnl-mult" className="h-8 w-20" type="number" min={0.01} step="any" value={multiplier} onChange={(e) => setMultiplier(e.target.value)} />
             </label>
             <span>
               Total PNL <span className="text-xs text-muted-foreground">(display only)</span> <strong><Pnl value={total} /></strong>
             </span>
-            <span className="rounded-md bg-primary/10 px-2 py-1 font-medium text-primary">{view.length} signals</span>
+            <span className="rounded-md bg-primary/10 px-2 py-1 font-medium text-primary">{view.length} trades</span>
           </div>
         }
       />
@@ -196,7 +311,7 @@ export default function AdminSignalsPage() {
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-xs">{fmtDate(r.entryAt)}</TableCell>
                       <TableCell className={cn('text-xs font-semibold', r.side === 'BUY' ? 'text-success' : 'text-destructive')}>{r.side}</TableCell>
-                      <TableCell className="text-right tabular-nums">{r.quantity}</TableCell>
+                      <TableCell className="text-right tabular-nums">{r.quantity * mult}</TableCell>
                       <TableCell className="text-right tabular-nums text-success">{formatINR(r.entryPrice)}</TableCell>
                       <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{fmtTime(r.entryAt)}</TableCell>
                       <TableCell className="text-right tabular-nums text-destructive">{r.exitPrice != null ? formatINR(r.exitPrice) : 'N/A'}</TableCell>
@@ -220,8 +335,18 @@ export default function AdminSignalsPage() {
                         <Pnl value={r.pnl * mult} />
                       </TableCell>
                       <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => setEditRow(r)}>
+                            <Pencil className="size-3.5" /> Edit
+                          </Button>
+                          {r.status === 'CLOSED' ? (
+                            <Button size="sm" variant="destructive" className="h-7 px-2 text-xs" onClick={() => setDeleteRow(r)}>
+                              <Trash2 className="size-3.5" /> Delete
+                            </Button>
+                          ) : null}
+                        </div>
                         {r.status === 'OPEN' ? (
-                          <div className="flex justify-end gap-2">
+                          <div className="mt-1 flex justify-end gap-2">
                             <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => setTpslRow(r)}>
                               <Target className="size-3.5" /> TP/SL
                             </Button>
@@ -246,7 +371,37 @@ export default function AdminSignalsPage() {
           </div>
         </CardContent>
       </Card>
+      <div className="mt-4">
+        <PerformanceCard rows={view} mult={mult} />
+      </div>
       <TpSlDialog row={tpslRow} onClose={() => setTpslRow(null)} scope="admin" />
+      <EditSignalDialog row={editRow} onClose={() => setEditRow(null)} />
+      <Dialog open={!!deleteRow} onOpenChange={(o) => !o && setDeleteRow(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete this trade?</DialogTitle>
+            <DialogDescription>
+              {deleteRow ? `${deleteRow.strategyName ?? ''} · ${deleteRow.side} ${deleteRow.symbol} (${fmtDate(deleteRow.entryAt)})` : ''} is removed from trade history and
+              performance. Client orders are not changed.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDeleteRow(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={remove.isPending}
+              onClick={() =>
+                deleteRow &&
+                remove.mutate(deleteRow.id, { onSuccess: () => (toast.success('Trade deleted'), setDeleteRow(null)), onError: (e) => toast.error(e.message) })
+              }
+            >
+              {remove.isPending ? 'Deleting…' : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

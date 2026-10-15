@@ -60,10 +60,28 @@ export function useBrokerApiMutations(b: BrokerSlug) {
 
 export interface ClientDashboard {
   todayPnl: number;
-  broker: { broker: string; brokerClientId: string | null; status: string; connected: boolean; tradingMode: 'PAPER' | 'LIVE' } | null;
+  broker: {
+    accountId: string;
+    broker: string;
+    brokerClientId: string | null;
+    status: string;
+    connected: boolean;
+    tradingMode: 'PAPER' | 'LIVE';
+    /** Server runs with PAPER_MODE=true — live trading is impossible for everyone. */
+    paperForced: boolean;
+  } | null;
   subscriptions: { total: number; on: number; off: number; paused: number };
-  licence: { expiresAt: string | null; days: number | null; remainingDays: number | null; active: boolean | null };
-  strategies: { followerId: string; strategyId: string; name: string; strategyStatus: string; copyStatus: 'ON' | 'OFF' | 'PAUSED'; allocation: string; todayPnl: number }[];
+  licence: { expiresAt: string | null; assignedAt: string | null; days: number | null; remainingDays: number | null; active: boolean | null };
+  strategies: {
+    followerId: string;
+    strategyId: string;
+    name: string;
+    strategyStatus: string;
+    copyStatus: 'ON' | 'OFF' | 'PAUSED';
+    allocation: string;
+    todayPnl: number;
+    todayTrades: number;
+  }[];
 }
 
 export const useClientDashboard = (enabled = true) =>

@@ -4,6 +4,7 @@ import { AuditService } from '../audit/audit.service';
 import { PRISMA } from '../common/prisma/prisma.service';
 import { AccountEvents } from '../realtime/account-events';
 import type { AssignClientDto } from './trading.dto';
+import { isRemoved, REMOVED_REASON } from './follower-access';
 
 /**
  * Master / admin assigns a client to a strategy (instead of the client subscribing himself).
@@ -55,6 +56,8 @@ export class ClientAssignService {
       maxDailyLoss: dto.maxDailyLoss ?? null,
       maxTradesPerDay: dto.maxTradesPerDay ?? null,
       allowedSegments: dto.allowedSegments ?? [],
+      // Re-assigning a removed client gives the strategy back to them.
+      ...(existing && isRemoved(existing) ? { stoppedReason: null } : {}),
       ...(canStart ? { copyStatus: 'ON' as const, startedAt: new Date(), stoppedAt: null, stoppedReason: null } : {}),
     };
     const row = await this.prisma.strategyFollower.upsert({
@@ -77,13 +80,13 @@ export class ClientAssignService {
     };
   }
 
-  /** Removes a client from a strategy: copying stops (history is kept). Positions are not touched. */
+  /** Removes a client from a strategy: copying stops and the client no longer sees it (history is kept). Positions are not touched. */
   async unassign(strategyId: string, followerId: string, actorUserId: string) {
     const sub = await this.prisma.strategyFollower.findFirst({ where: { id: followerId, strategyId } });
     if (!sub) throw new NotFoundException('Client is not assigned to this strategy');
     const row = await this.prisma.strategyFollower.update({
       where: { id: sub.id },
-      data: { copyStatus: 'OFF', stoppedAt: new Date(), stoppedReason: 'Removed from strategy', stoppedByUserId: actorUserId },
+      data: { copyStatus: 'OFF', stoppedAt: new Date(), stoppedReason: REMOVED_REASON, stoppedByUserId: actorUserId },
       include: { strategy: { select: { name: true } } },
     });
     await this.audit.log({ action: 'COPY_STOPPED', actorUserId, targetType: 'StrategyFollower', targetId: sub.id, metadata: { reason: 'unassigned' } });

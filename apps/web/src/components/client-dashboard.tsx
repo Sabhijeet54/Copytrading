@@ -10,6 +10,9 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { type ClientDashboard as Data, useClientDashboard } from '@/lib/broker-api';
 import { brokerLabel, formatINR } from '@/lib/format';
+import { useSetTradingMode } from '@/lib/trading';
+import { toast } from 'sonner';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 
 /** Validated categorical palette (distinct in light and dark). */
@@ -92,6 +95,71 @@ function Donut({ rows }: { rows: Data['strategies'] }) {
   );
 }
 
+const fmtDay = (iso: string) => new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }).format(new Date(iso));
+
+/** Paper ⇄ Live switch for the client's trading account (asks before going live). */
+function TradingModeSwitch({ b }: { b: NonNullable<Data['broker']> }) {
+  const setMode = useSetTradingMode();
+  const [confirmLive, setConfirmLive] = useState(false);
+  const live = b.tradingMode === 'LIVE';
+  const locked = b.paperForced;
+  const flip = () => {
+    if (locked) return void toast.info('Live trading is switched off on this platform (paper mode). Ask your admin to enable it.');
+    if (live) setMode.mutate('PAPER', { onSuccess: () => toast.success('Switched to PAPER — copied trades are now simulated'), onError: (e) => toast.error(e.message) });
+    else setConfirmLive(true);
+  };
+  return (
+    <div className="grid gap-1">
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span>Trading mode</span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={live}
+          aria-label="Live trading"
+          onClick={flip}
+          disabled={setMode.isPending}
+          title={locked ? 'Platform is in paper mode' : live ? 'Switch to paper trading' : 'Switch to live trading'}
+          className={cn('flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-muted', locked && 'cursor-not-allowed opacity-70')}
+        >
+          <span className={cn(!live && 'font-semibold text-foreground')}>Paper</span>
+          <span className={cn('relative inline-block h-4 w-7 rounded-full transition-colors', live ? 'bg-emerald-600' : 'bg-muted-foreground/40')}>
+            <span className={cn('absolute top-0.5 size-3 rounded-full bg-white transition-all', live ? 'left-3.5' : 'left-0.5')} />
+          </span>
+          <span className={cn(live && 'font-semibold text-success')}>Live</span>
+        </button>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        {locked ? 'Platform is in paper mode — no real orders for anyone.' : live ? 'Copied trades go to your broker as real orders.' : 'Copied trades are simulated — no real orders.'}
+      </p>
+      <Dialog open={confirmLive} onOpenChange={setConfirmLive}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Switch to LIVE trading?</DialogTitle>
+            <DialogDescription>From the next master trade, copied orders are placed as REAL orders in your broker account with real money.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirmLive(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={setMode.isPending}
+              onClick={() =>
+                setMode.mutate('LIVE', {
+                  onSuccess: () => (toast.success('LIVE trading is ON'), setConfirmLive(false)),
+                  onError: (e) => toast.error(e.message),
+                })
+              }
+            >
+              Go live
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 export function ClientDashboard() {
   const q = useClientDashboard();
   const d = q.data;
@@ -122,7 +190,12 @@ export function ClientDashboard() {
                 {up ? '+' : ''}
                 {formatINR(d.todayPnl)}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">Today&apos;s profit / loss</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Today&apos;s profit / loss ·{' '}
+                <Link href="/portfolio/positions" className="font-medium text-primary hover:underline">
+                  positions
+                </Link>
+              </p>
             </div>
             {up ? <ArrowUpRight className="size-8 text-success" /> : <ArrowDownRight className="size-8 text-destructive" />}
           </CardContent>
@@ -141,19 +214,10 @@ export function ClientDashboard() {
                   </span>
                   {d.broker.connected ? <Badge tone="ok">Connected</Badge> : <Badge tone="warn">{d.broker.status === 'EXPIRED' ? 'Expired' : 'Not connected'}</Badge>}
                 </div>
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>Trading mode</span>
-                  <span className="flex items-center gap-2">
-                    <span className={cn(d.broker.tradingMode === 'PAPER' && 'font-semibold text-foreground')}>Paper</span>
-                    <span className={cn('relative inline-block h-4 w-7 rounded-full', d.broker.tradingMode === 'LIVE' ? 'bg-primary' : 'bg-muted')} aria-hidden>
-                      <span className={cn('absolute top-0.5 size-3 rounded-full bg-white transition-all', d.broker.tradingMode === 'LIVE' ? 'left-3.5' : 'left-0.5')} />
-                    </span>
-                    <span className={cn(d.broker.tradingMode === 'LIVE' && 'font-semibold text-success')}>Live</span>
-                  </span>
-                </div>
+                <TradingModeSwitch b={d.broker} />
                 {!d.broker.connected ? (
                   <Button asChild size="sm" variant="outline">
-                    <Link href="/broker-api">Connect broker</Link>
+                    <Link href="/broker">Connect broker</Link>
                   </Button>
                 ) : null}
               </>
@@ -170,7 +234,7 @@ export function ClientDashboard() {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">Subscriptions</CardTitle>
+            <CardTitle className="text-base">Strategies</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-3 text-sm">
             <div className="flex items-center justify-between border-b pb-2">
@@ -193,25 +257,30 @@ export function ClientDashboard() {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">Subscription</CardTitle>
+            <CardTitle className="text-base">Licence</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 text-sm">
             {d.licence.expiresAt ? (
               <>
-                <p className="text-xs text-muted-foreground">Remaining days</p>
                 <p className="flex items-center gap-2">
-                  <span className="text-2xl font-semibold tabular-nums text-success">{d.licence.remainingDays}</span> days
+                  <span className={cn('text-2xl font-semibold tabular-nums', d.licence.active ? 'text-success' : 'text-destructive')}>{d.licence.remainingDays}</span> days left
                   {d.licence.active ? <Badge tone="ok">Active</Badge> : <Badge tone="warn">Expired</Badge>}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Expiry date{' '}
-                  <span className="font-medium text-foreground">
-                    {new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }).format(new Date(d.licence.expiresAt))}
-                  </span>
+                  {d.licence.assignedAt ? (
+                    <>
+                      From <span className="font-medium text-foreground">{fmtDay(d.licence.assignedAt)}</span>{' '}
+                    </>
+                  ) : null}
+                  till <span className="font-medium text-foreground">{fmtDay(d.licence.expiresAt)}</span>
                 </p>
+                {!d.licence.active ? <p className="text-xs text-destructive">Copy trading is stopped — contact your admin to renew.</p> : null}
               </>
             ) : (
-              <p className="text-muted-foreground">No licence assigned — contact your admin.</p>
+              <>
+                <p className="font-medium">No licence assigned</p>
+                <p className="text-xs text-muted-foreground">Contact your admin to activate your subscription.</p>
+              </>
             )}
           </CardContent>
         </Card>
@@ -251,7 +320,7 @@ export function ClientDashboard() {
                 {sorted.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
-                      You are not subscribed to any strategy yet.
+                      No strategy assigned to you yet — contact your admin.
                     </TableCell>
                   </TableRow>
                 ) : (

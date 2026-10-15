@@ -67,8 +67,8 @@ export class SignalTpSlDto {
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) stopLossPrice?: number | null;
 }
 
-export class AssignClientDto {
-  @Transform(trim) @IsString() @Length(3, 200) email!: string;
+/** Allocation + limits of one client in one strategy (admin assigns by user id, master by email). */
+export class AssignStrategyDto {
   @IsOptional() @IsString() brokerAccountId?: string;
   @IsOptional() @IsEnum({ FIXED_QUANTITY: 'FIXED_QUANTITY', CAPITAL_PERCENTAGE: 'CAPITAL_PERCENTAGE', PROPORTIONAL: 'PROPORTIONAL' })
   allocationMode?: 'FIXED_QUANTITY' | 'CAPITAL_PERCENTAGE' | 'PROPORTIONAL';
@@ -83,6 +83,26 @@ export class AssignClientDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) maxTradesPerDay?: number;
   @IsOptional() @IsArray() @ArrayUnique() @IsIn(['EQ', 'FO'], { each: true }) allowedSegments?: ('EQ' | 'FO')[];
   @IsOptional() @IsBoolean() startCopy?: boolean;
+}
+
+export class AssignClientDto extends AssignStrategyDto {
+  @Transform(trim) @IsString() @Length(3, 200) email!: string;
+}
+
+export class TradingModeDto {
+  @IsIn(['PAPER', 'LIVE']) mode!: 'PAPER' | 'LIVE';
+}
+
+export class ClientHistoryQueryDto {
+  /** today (default) | 7d | 30d | all */
+  @IsOptional() @IsIn(['today', '7d', '30d', 'all']) range?: 'today' | '7d' | '30d' | 'all';
+}
+
+/** Admin correction of a signal in trade history (P&L is recomputed). */
+export class EditSignalDto {
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) entryPrice?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) exitPrice?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(1_000_000) quantity?: number;
 }
 
 export class ExitPositionDto {

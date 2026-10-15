@@ -174,91 +174,189 @@ function PositionsTable({
   );
 }
 
-/** Funds, open positions, holdings and today's orders straight from the broker. */
-export function LiveAccountCard({ a, canExit = false, clientUserId }: { a: LiveAccount; canExit?: boolean; clientUserId?: string }) {
+function useAccountLtps(a: LiveAccount) {
   const open = (a.positions ?? []).filter((p) => p.quantity !== 0);
-  const closed = (a.positions ?? []).filter((p) => p.quantity === 0);
-  const ltps = useLtps([...open, ...(a.holdings ?? [])].map((p) => keyOf(p.exchange, p.symbol))).data;
-  const dayPnl = (a.positions ?? []).reduce((s, p) => {
+  return useLtps([...open, ...(a.holdings ?? [])].map((p) => keyOf(p.exchange, p.symbol))).data;
+}
+
+function dayPnlOf(a: LiveAccount, ltps?: LtpMap) {
+  return (a.positions ?? []).reduce((s, p) => {
     const ltp = liveLtp(ltps, p.exchange, p.symbol, p.lastPrice);
     return s + (p.pnl != null && p.lastPrice != null && ltp != null ? p.pnl + (ltp - p.lastPrice) * p.quantity : (p.pnl ?? 0));
   }, 0);
+}
+
+function AccountTitle({ a, children }: { a: LiveAccount; children?: React.ReactNode }) {
+  return (
+    <CardHeader>
+      <CardTitle className="flex flex-wrap items-center gap-2">
+        {brokerLabel(a.broker)} <span className="text-sm font-normal text-muted-foreground">{a.brokerClientId}</span>
+      </CardTitle>
+      <CardDescription>{children ?? 'Live from the broker · prices update every 2 s from the market feed'}</CardDescription>
+    </CardHeader>
+  );
+}
+
+function AccountError({ a }: { a: LiveAccount }) {
+  return <p className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{a.error}</p>;
+}
+
+/**
+ * Today's broker positions — open ones first, then positions closed today (qty 0) with their realized P&L,
+ * the same way the broker app shows them. Holdings are NOT here (see HoldingsCard).
+ */
+export function LivePositionsCard({ a, canExit = false, clientUserId }: { a: LiveAccount; canExit?: boolean; clientUserId?: string }) {
+  const open = (a.positions ?? []).filter((p) => p.quantity !== 0);
+  const closed = (a.positions ?? []).filter((p) => p.quantity === 0);
+  const ltps = useAccountLtps(a);
+  const dayPnl = dayPnlOf(a, ltps);
   const { exit, pending, pendingVars } = useExit(clientUserId);
   const exiting = pending && pendingVars ? `${pendingVars.exchange}:${pendingVars.symbol}:${pendingVars.productType}` : null;
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="flex flex-wrap items-center gap-2">
-          {brokerLabel(a.broker)} <span className="text-sm font-normal text-muted-foreground">{a.brokerClientId}</span>
-        </CardTitle>
-        <CardDescription>Live from the broker · prices update every 2 s from the market feed</CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-6">
+      <AccountTitle a={a} />
+      <CardContent className="grid gap-4">
         {a.error ? (
-          <p className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{a.error}</p>
+          <AccountError a={a} />
         ) : (
           <>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Stat label="Available cash" value={formatINR(a.funds?.availableCash)} />
-              <Stat label="Net" value={formatINR(a.funds?.net)} />
               <Stat label="Open positions" value={String(open.length)} />
-              <Stat label="Today's P&L" value={<Pnl value={dayPnl} />} />
+              <Stat label="Closed today" value={String(closed.length)} />
+              <Stat label="Positions P&L" value={<Pnl value={dayPnl} />} />
             </div>
-            <section>
-              <h3 className="mb-2 text-sm font-semibold">Positions</h3>
-              <PositionsTable
-                rows={[...open, ...closed]}
-                empty="No positions today"
-                ltps={ltps}
-                onExit={canExit ? (p) => exit(a.accountId, p) : undefined}
-                exiting={exiting}
-              />
-            </section>
-            <section>
-              <h3 className="mb-2 text-sm font-semibold">Holdings</h3>
-              <PositionsTable rows={a.holdings ?? []} empty="No holdings" product={false} ltps={ltps} />
-            </section>
-            <section>
-              <h3 className="mb-2 text-sm font-semibold">Today&apos;s orders</h3>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Symbol</TableHead>
-                      <TableHead>Side</TableHead>
-                      <TableHead className="text-right">Qty</TableHead>
-                      <TableHead className="text-right">Avg price</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {(a.orders ?? []).length === 0 ? (
-                      <Empty cols={5} text="No orders today" />
-                    ) : (
-                      [...(a.orders ?? [])].reverse().map((o) => (
-                        <TableRow key={o.brokerOrderId}>
-                          <TableCell className="font-medium">
-                            {o.symbol} <span className="text-xs text-muted-foreground">{o.exchange}</span>
-                          </TableCell>
-                          <TableCell className={o.side === 'BUY' ? 'text-success' : 'text-destructive'}>{o.side}</TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {o.filledQuantity}/{o.quantity}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">{formatINR(o.averagePrice ?? o.price)}</TableCell>
-                          <TableCell title={o.statusMessage}>
-                            <StatusBadge value={o.status} />
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-            </section>
+            <PositionsTable
+              rows={[...open, ...closed]}
+              empty="No positions today"
+              ltps={ltps}
+              onExit={canExit ? (p) => exit(a.accountId, p) : undefined}
+              exiting={exiting}
+            />
           </>
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/** Long-term holdings (delivery stock bought earlier) — kept apart from today's positions. */
+export function HoldingsCard({ a }: { a: LiveAccount }) {
+  const ltps = useAccountLtps(a);
+  const rows = a.holdings ?? [];
+  const invested = rows.reduce((s, h) => s + h.averagePrice * h.quantity, 0);
+  const current = rows.reduce((s, h) => s + (liveLtp(ltps, h.exchange, h.symbol, h.lastPrice) ?? h.averagePrice) * h.quantity, 0);
+  return (
+    <Card>
+      <AccountTitle a={a}>Holdings in your demat account (bought on earlier days)</AccountTitle>
+      <CardContent className="grid gap-4">
+        {a.error ? (
+          <AccountError a={a} />
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <Stat label="Invested" value={formatINR(invested)} />
+              <Stat label="Current value" value={formatINR(current)} />
+              <Stat label="Total P&L" value={<Pnl value={current - invested} />} />
+            </div>
+            <PositionsTable rows={rows} empty="No holdings" product={false} ltps={ltps} />
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Today's orders in the broker's order book. */
+export function BrokerOrdersCard({ a }: { a: LiveAccount }) {
+  return (
+    <Card>
+      <AccountTitle a={a}>Today&apos;s orders in your broker account</AccountTitle>
+      <CardContent>
+        {a.error ? (
+          <AccountError a={a} />
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Time</TableHead>
+                  <TableHead>Symbol</TableHead>
+                  <TableHead>Side</TableHead>
+                  <TableHead className="text-right">Qty</TableHead>
+                  <TableHead className="text-right">Avg price</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(a.orders ?? []).length === 0 ? (
+                  <Empty cols={6} text="No orders today" />
+                ) : (
+                  [...(a.orders ?? [])].reverse().map((o) => (
+                    <TableRow key={o.brokerOrderId}>
+                      <TableCell className="whitespace-nowrap text-xs">{o.timestamp ? formatDateTime(o.timestamp) : '—'}</TableCell>
+                      <TableCell className="font-medium">
+                        {o.symbol} <span className="text-xs text-muted-foreground">{o.exchange}</span>
+                      </TableCell>
+                      <TableCell className={o.side === 'BUY' ? 'text-success' : 'text-destructive'}>{o.side}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {o.filledQuantity}/{o.quantity}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{formatINR(o.averagePrice ?? o.price)}</TableCell>
+                      <TableCell title={o.statusMessage}>
+                        <StatusBadge value={o.status} />
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Funds, positions, holdings and today's orders straight from the broker, as three tabs. */
+export function LiveAccountCard({ a, canExit = false, clientUserId }: { a: LiveAccount; canExit?: boolean; clientUserId?: string }) {
+  const [tab, setTab] = useState<'positions' | 'holdings' | 'orders'>('positions');
+  return (
+    <div className="grid gap-2">
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { value: 'positions', label: `Positions (${(a.positions ?? []).length})` },
+          { value: 'holdings', label: `Holdings (${(a.holdings ?? []).length})` },
+          { value: 'orders', label: `Orders (${(a.orders ?? []).length})` },
+        ]}
+      />
+      {tab === 'positions' ? <LivePositionsCard a={a} canExit={canExit} clientUserId={clientUserId} /> : tab === 'holdings' ? <HoldingsCard a={a} /> : <BrokerOrdersCard a={a} />}
+    </div>
+  );
+}
+
+/** Simple segmented tabs. */
+export function Tabs<T extends string>({ value, onChange, tabs }: { value: T; onChange: (v: T) => void; tabs: { value: T; label: string }[] }) {
+  return (
+    <div role="tablist" className="inline-flex w-fit flex-wrap gap-1 rounded-lg border bg-muted/40 p-1">
+      {tabs.map((t) => (
+        <button
+          key={t.value}
+          type="button"
+          role="tab"
+          aria-selected={value === t.value}
+          onClick={() => onChange(t.value)}
+          className={cn(
+            'rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground',
+            value === t.value && 'bg-background text-foreground shadow-sm',
+          )}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -268,6 +366,7 @@ export function PaperPositionsCard({
   canExit = false,
   clientUserId,
   signalBook = false,
+  inlineClosed = false,
 }: {
   rows: PaperPosition[];
   title?: string;
@@ -275,9 +374,11 @@ export function PaperPositionsCard({
   clientUserId?: string;
   /** Master's own virtual book: Exit squares off the instrument's signals for master + all clients. */
   signalBook?: boolean;
+  /** Show positions closed today right in the table (qty 0 + realized P&L) like the broker app does. */
+  inlineClosed?: boolean;
 }) {
-  const open = rows.filter((p) => p.quantity !== 0);
-  const closed = rows.filter((p) => p.quantity === 0);
+  const open = inlineClosed ? rows : rows.filter((p) => p.quantity !== 0);
+  const closed = inlineClosed ? [] : rows.filter((p) => p.quantity === 0);
   const [showClosed, setShowClosed] = useState(false);
   const ltps = useLtps(open.map((p) => keyOf(p.exchange, p.symbol))).data;
   const selfExit = useExit(clientUserId);
@@ -288,7 +389,11 @@ export function PaperPositionsCard({
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <CardDescription>Simulated fills (PAPER_MODE / paper accounts). No real orders were placed. Exited positions move to Closed history.</CardDescription>
+        <CardDescription>
+          {inlineClosed
+            ? 'Paper trading — simulated fills, no real orders. Positions closed today stay listed with qty 0 and their realized P&L.'
+            : 'Simulated fills (PAPER_MODE / paper accounts). No real orders were placed. Exited positions move to Closed history.'}
+        </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4 overflow-x-auto">
         <Table>
@@ -305,7 +410,7 @@ export function PaperPositionsCard({
           </TableHeader>
           <TableBody>
             {open.length === 0 ? (
-              <Empty cols={canExit ? 7 : 6} text="No open positions" />
+              <Empty cols={canExit ? 7 : 6} text={inlineClosed ? 'No positions today' : 'No open positions'} />
             ) : (
               open.map((p) => {
                 const ltp = liveLtp(ltps, p.exchange, p.symbol, p.lastPrice == null ? null : Number(p.lastPrice));

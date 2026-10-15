@@ -15,6 +15,8 @@ import { ClientRegistryService } from './client-registry.service';
 import { CopyEngineService } from './copy-engine.service';
 
 const D = (v: Prisma.Decimal | null | undefined) => (v == null ? null : Number(v));
+/** signalStatus of a signal removed from trade history by an admin. */
+const DELETED = 'DELETED';
 export type SignalExitReason = 'TARGET' | 'STOPLOSS' | 'SQUARE_OFF' | 'STRATEGY_EXIT' | 'AUTO_SQUARE_OFF' | 'KILL_SWITCH';
 
 /**
@@ -66,7 +68,7 @@ export class SignalService implements OnApplicationBootstrap, OnModuleDestroy {
     const rows = await this.prisma.masterTrade.findMany({
       where: {
         ...(masterUserId ? { masterUserId } : {}),
-        signalStatus: opts.status === 'open' ? 'OPEN' : opts.status === 'closed' ? 'CLOSED' : { not: null },
+        signalStatus: opts.status === 'open' ? 'OPEN' : opts.status === 'closed' ? 'CLOSED' : { in: ['OPEN', 'CLOSED'] },
         ...(opts.from || opts.to ? { createdAt: { ...(opts.from ? { gte: opts.from } : {}), ...(opts.to ? { lte: opts.to } : {}) } } : {}),
         ...(opts.strategyIds?.length ? { strategyId: { in: opts.strategyIds } } : {}),
       },
@@ -107,8 +109,53 @@ export class SignalService implements OnApplicationBootstrap, OnModuleDestroy {
 
   private async getOwned(masterUserId: string | null, id: string): Promise<MasterTrade> {
     const sig = await this.prisma.masterTrade.findUnique({ where: { id } });
-    if (!sig || !sig.signalStatus || (masterUserId && sig.masterUserId !== masterUserId)) throw new NotFoundException('Signal not found');
+    if (!sig || !sig.signalStatus || sig.signalStatus === DELETED || (masterUserId && sig.masterUserId !== masterUserId)) throw new NotFoundException('Signal not found');
     return sig;
+  }
+
+  // ------------------------------------------------------------ admin corrections (trade history)
+
+  /**
+   * Admin correction of one signal in trade history: entry / exit price and quantity. Realized P&L of the
+   * exited quantity is recomputed. Client copy orders are NOT changed (they are the real broker fills).
+   */
+  async edit(id: string, dto: { entryPrice?: number; exitPrice?: number; quantity?: number }, actorUserId: string) {
+    const sig = await this.getOwned(null, id);
+    const entry = dto.entryPrice ?? D(sig.averagePrice) ?? D(sig.price);
+    const size = dto.quantity ?? (sig.filledQuantity > 0 ? sig.filledQuantity : sig.quantity);
+    const closedQty = Math.min(sig.closedQuantity, size);
+    if (dto.exitPrice != null && closedQty <= 0) throw new BadRequestException('This signal has no exit yet — square it off first.');
+    const exit = dto.exitPrice ?? D(sig.exitPrice);
+    const dir = sig.side === 'BUY' ? 1 : -1;
+    const pnl = entry != null && exit != null && closedQty > 0 ? (exit - entry) * closedQty * dir : D(sig.realizedPnl);
+    await this.prisma.masterTrade.update({
+      where: { id },
+      data: {
+        ...(dto.entryPrice != null ? { averagePrice: dto.entryPrice } : {}),
+        ...(dto.exitPrice != null ? { exitPrice: dto.exitPrice } : {}),
+        ...(dto.quantity != null ? { quantity: dto.quantity, filledQuantity: dto.quantity, closedQuantity: closedQty } : {}),
+        ...(dto.quantity != null && closedQty >= dto.quantity && sig.signalStatus === 'OPEN' ? { signalStatus: 'CLOSED', exitedAt: sig.exitedAt ?? new Date() } : {}),
+        realizedPnl: pnl,
+      },
+    });
+    await this.audit.log({
+      action: 'STRATEGY_UPDATED',
+      actorUserId,
+      targetType: 'MasterTrade',
+      targetId: id,
+      metadata: { signalEdited: true, before: { entry: D(sig.averagePrice), exit: D(sig.exitPrice), qty: sig.quantity }, after: dto },
+    });
+    this.refreshWatch();
+    return { id, realizedPnl: pnl };
+  }
+
+  /** Removes one signal from trade history / performance (soft delete). Open signals must be squared off first. */
+  async remove(id: string, actorUserId: string) {
+    const sig = await this.getOwned(null, id);
+    if (sig.signalStatus === 'OPEN') throw new BadRequestException('Square off this signal before deleting it.');
+    await this.prisma.masterTrade.update({ where: { id }, data: { signalStatus: DELETED } });
+    await this.audit.log({ action: 'STRATEGY_UPDATED', actorUserId, targetType: 'MasterTrade', targetId: id, metadata: { signalDeleted: true, symbol: sig.symbol } });
+    return { id, deleted: true };
   }
 
   // ------------------------------------------------------------ target / stop loss

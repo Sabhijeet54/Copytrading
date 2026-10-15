@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Inject, NotFoundException, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Inject, NotFoundException, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { clientInfo } from '../common/client-info';
 import { CurrentUser, RequestUser, Roles } from '../common/decorators/auth.decorators';
@@ -6,7 +6,8 @@ import { AdminService } from './admin.service';
 import { CopyEngineService } from '../trading/copy-engine.service';
 import { RiskService } from '../trading/risk.service';
 import { ClientAssignService } from '../trading/client-assign.service';
-import { AssignClientDto, SignalTpSlDto } from '../trading/trading.dto';
+import { AssignClientDto, AssignStrategyDto, EditSignalDto, SignalTpSlDto } from '../trading/trading.dto';
+import { allocationLabel, isRemoved } from '../trading/follower-access';
 import { SignalService } from '../trading/signal.service';
 import { toStrategyFollowerView } from '../common/mappers';
 import { PRISMA } from '../common/prisma/prisma.service';
@@ -120,6 +121,64 @@ export class AdminController {
   @Patch('signals/:id/tpsl')
   setSignalTpSl(@Param('id') id: string, @Body() dto: SignalTpSlDto) {
     return this.signals.setTpSl(null, id, dto.targetPrice ?? null, dto.stopLossPrice ?? null);
+  }
+
+  // --------------------------------------------------------------- per-client strategy access
+
+  /** Every strategy with this client's assignment (null = not assigned). */
+  @Get('users/:id/strategies')
+  async userStrategies(@Param('id') id: string) {
+    const u = await this.prisma.user.findUnique({ where: { id }, select: { id: true, role: true } });
+    if (!u) throw new NotFoundException('User not found');
+    const [strategies, subs] = await Promise.all([
+      this.prisma.strategy.findMany({ where: { status: { not: 'ARCHIVED' } }, include: { master: { select: { name: true } } }, orderBy: { name: 'asc' } }),
+      this.prisma.strategyFollower.findMany({ where: { followerUserId: id } }),
+    ]);
+    const bySid = new Map(subs.map((x) => [x.strategyId, x]));
+    return strategies.map((st) => {
+      const sub = bySid.get(st.id);
+      const assigned = !!sub && !isRemoved(sub);
+      return {
+        strategyId: st.id,
+        name: st.name,
+        masterName: st.master.name,
+        status: st.status,
+        assigned,
+        subscription: assigned && sub ? { ...toStrategyFollowerView(sub), allocation: allocationLabel(sub) } : null,
+      };
+    });
+  }
+
+  /** Give one strategy to one client (or change the allocation / lot multiplier). */
+  @HttpCode(HttpStatus.OK)
+  @Post('users/:id/strategies/:strategyId')
+  async assignUserStrategy(@CurrentUser() me: RequestUser, @Param('id') id: string, @Param('strategyId') strategyId: string, @Body() dto: AssignStrategyDto) {
+    const [u, s] = await Promise.all([this.prisma.user.findUnique({ where: { id } }), this.prisma.strategy.findUnique({ where: { id: strategyId } })]);
+    if (!u) throw new NotFoundException('User not found');
+    if (!s) throw new NotFoundException('Strategy not found');
+    const { follower, warning } = await this.assigner.assign(s, { ...dto, email: u.email }, me.id);
+    return { follower: toStrategyFollowerView(follower), warning };
+  }
+
+  /** Take one strategy away from one client (copying stops; history and positions are kept). */
+  @HttpCode(HttpStatus.OK)
+  @Post('users/:id/strategies/:strategyId/remove')
+  async removeUserStrategy(@CurrentUser() me: RequestUser, @Param('id') id: string, @Param('strategyId') strategyId: string) {
+    const sub = await this.prisma.strategyFollower.findUnique({ where: { strategyId_followerUserId: { strategyId, followerUserId: id } } });
+    if (!sub) throw new NotFoundException('This strategy is not assigned to the client');
+    return toStrategyFollowerView(await this.assigner.unassign(strategyId, sub.id, me.id));
+  }
+
+  // --------------------------------------------------------------- trade history corrections
+
+  @Patch('signals/:id')
+  editSignal(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: EditSignalDto) {
+    return this.signals.edit(id, dto, me.id);
+  }
+
+  @Delete('signals/:id')
+  deleteSignal(@CurrentUser() me: RequestUser, @Param('id') id: string) {
+    return this.signals.remove(id, me.id);
   }
 
   @Patch('users/:id/status')
