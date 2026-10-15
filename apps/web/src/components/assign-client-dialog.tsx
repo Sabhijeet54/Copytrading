@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { type DirectoryClient, useAssignClient, useClientDirectory } from '@/lib/trading';
 import { cn } from '@/lib/utils';
+import { toastResized } from '@/lib/resize-toast';
 
 /**
  * Assign a client to a strategy: pick the client from a searchable list (no typing emails), set the lot
@@ -52,6 +53,7 @@ export function AssignClientDialog({
         onSuccess: (r) => {
           if (r.warning) toast.warning(r.warning);
           else toast.success(`${picked.name} → ${strategy.name}`);
+          toastResized(r.resized);
           onOpenChange(false);
         },
         onError: (err) => toast.error(err.message),

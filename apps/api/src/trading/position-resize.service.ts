@@ -46,7 +46,7 @@ export class PositionResizeService {
 
   async resizeOpen(followerId: string, actorUserId: string): Promise<ResizeResult[]> {
     const sub = await this.prisma.strategyFollower.findUnique({ where: { id: followerId }, include: { strategy: true, brokerAccount: true } });
-    if (!sub || !sub.brokerAccount || sub.copyStatus !== 'ON') return [];
+    if (!sub || !sub.brokerAccount) return [];
     const account = sub.brokerAccount;
     const open = await this.prisma.masterTrade.findMany({ where: { strategyId: sub.strategyId, signalStatus: 'OPEN' }, orderBy: { createdAt: 'asc' } });
     if (!open.length) return [];
@@ -71,19 +71,34 @@ export class PositionResizeService {
       allocationAmount: N(sub.allocationAmount),
       fixedQuantity: sub.fixedQuantity,
       fixedLots: sub.fixedLots,
-      maxLots: sub.maxLots,
-      maxQuantity: sub.maxQuantity,
-      maxTradeValue: null, // resizing an existing trade is not limited by per-order value caps
+      // Per-order caps limit ONE order, not the size of a position that is being resized.
+      maxLots: null,
+      maxQuantity: null,
+      maxTradeValue: null,
     };
-    const strat = { masterCapital: N(sub.strategy.masterCapital), maxOrderValue: null, maxQuantityPerOrder: sub.strategy.maxQuantityPerOrder };
+    const strat = { masterCapital: N(sub.strategy.masterCapital), maxOrderValue: null, maxQuantityPerOrder: null };
     const simulated = this.trading.isSimulated(account);
     const out: ResizeResult[] = [];
 
     for (const i of byInst.values()) {
       if (!i.net) continue;
-      const price = this.prices.get(instrumentKey(i.exchange, i.symbol)) ?? null;
+      const entry = open.find((t) => i.ids.includes(t.id));
+      const paperPos = await this.prisma.position.findFirst({ where: { brokerAccountId: account.id, exchange: i.exchange, symbol: i.symbol, productType: i.productType } });
+      // Live LTP, else the last known price (paper position / signal entry) so a paper resize never stalls.
+      const price =
+        this.prices.get(instrumentKey(i.exchange, i.symbol)) ??
+        N(paperPos?.lastPrice) ??
+        N(entry?.averagePrice) ??
+        N(entry?.price) ??
+        null;
       const target = Math.sign(i.net) * computeCopyQuantity(strat, settings, Math.abs(i.net), null, i.lot).qty;
-      const current = this.registry.clientNet(sub.id, i.exchange, i.symbol, i.productType);
+      let current = this.registry.clientNet(sub.id, i.exchange, i.symbol, i.productType);
+      if (current === 0) {
+        // Registry not seeded for this follower (e.g. right after a restart): rebuild from his copy orders of these signals.
+        const fills = await this.prisma.copyOrder.findMany({ where: { strategyFollowerId: sub.id, masterTradeId: { in: i.ids }, filledQuantity: { gt: 0 } } });
+        current = fills.reduce((a, f) => a + (f.side === 'BUY' ? f.filledQuantity : -f.filledQuantity), 0);
+        if (current) this.registry.applyClientFill(sub.id, i.exchange, i.symbol, i.productType, current);
+      }
       // Only resize a position the client actually holds in the same direction as the master.
       if (current === 0 || Math.sign(current) !== Math.sign(i.net)) continue;
       const diff = target - current;

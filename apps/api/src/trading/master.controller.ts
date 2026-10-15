@@ -170,8 +170,8 @@ export class MasterController {
   @Post('strategies/:id/assign')
   async assign(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: AssignClientDto) {
     const s = await this.own(user, id);
-    const { follower, warning } = await this.assigner.assign(s, dto, user.id);
-    return { follower: toStrategyFollowerView(follower), warning };
+    const { follower, warning, resized } = await this.assigner.assign(s, dto, user.id);
+    return { follower: toStrategyFollowerView(follower), warning, resized };
   }
 
   /** Remove a client from one of my strategies (copying stops; open positions are left as they are). */

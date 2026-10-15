@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { brokerLabel, humanize } from '@/lib/format';
 import { useMyBrokerAccounts } from '@/lib/queries';
+import { toastResized } from '@/lib/resize-toast';
 import { type FollowInput, type StrategyWithSub, useFollow } from '@/lib/trading';
 
 const PRESETS = ['1', '2', '3', '5'];
@@ -57,10 +58,9 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
       { strategyId: s.id, body },
       {
         onSuccess: (r) => {
-          const done = (r.resized ?? []).filter((x) => x.ok);
-          const bad = (r.resized ?? []).filter((x) => !x.ok);
-          toast.success(`Saved — ${m}× lots${done.length ? ` · open trades resized: ${done.map((x) => `${x.symbol} ${x.from}→${x.to}`).join(', ')}` : ''}`);
-          for (const b of bad) toast.error(`${b.symbol}: could not resize (${b.error ?? 'error'})`);
+          toast.success(`Saved — ${m}× lots`);
+          toastResized(r.resized);
+          if (applyOpen && !(r.resized ?? []).length) toast.info('No open trade in this strategy — the new size applies from the next trade.');
           onClose();
         },
         onError: (err) => toast.error(err.message),

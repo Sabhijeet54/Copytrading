@@ -13,6 +13,7 @@ import { formatDateTime } from '@/lib/format';
 import { useAdminUserMutations } from '@/lib/queries';
 import { type UserStrategyRow, useAdminUserStrategies, useAdminUserStrategyMutations } from '@/lib/trading';
 import { cn } from '@/lib/utils';
+import { toastResized } from '@/lib/resize-toast';
 
 type RoleValue = 'ADMIN' | 'MASTER' | 'FOLLOWER';
 const ROLE_LABEL: Record<RoleValue, string> = { FOLLOWER: 'Client (follower)', MASTER: 'Master trader', ADMIN: 'Admin' };
@@ -287,6 +288,7 @@ function StrategyAccessRow({ userId, row }: { userId: string; row: UserStrategyR
         onSuccess: (r) => {
           if (r.warning) toast.warning(r.warning);
           else toast.success(`${row.name} ${row.assigned ? 'updated' : 'assigned'}`);
+          toastResized(r.resized);
           setOpen(false);
         },
         onError: (e) => toast.error(e.message),

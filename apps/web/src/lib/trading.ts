@@ -199,7 +199,7 @@ export function useAssignClient(strategyId: string, scope: 'master' | 'admin' = 
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: AssignClientInput) =>
-      api<{ warning: string | null }>(`/${scope}/strategies/${strategyId}/assign`, { method: 'POST', body }),
+      api<{ warning: string | null; resized?: ResizeResult[] }>(`/${scope}/strategies/${strategyId}/assign`, { method: 'POST', body }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['master'] });
       void qc.invalidateQueries({ queryKey: ['admin'] });
@@ -464,7 +464,7 @@ export function useAdminUserStrategyMutations(userId: string) {
   return {
     assign: useMutation({
       mutationFn: ({ strategyId, body }: { strategyId: string; body: AssignStrategyInput }) =>
-        api<{ warning: string | null }>(`/admin/users/${userId}/strategies/${strategyId}`, { method: 'POST', body }),
+        api<{ warning: string | null; resized?: ResizeResult[] }>(`/admin/users/${userId}/strategies/${strategyId}`, { method: 'POST', body }),
       onSuccess: done,
     }),
     remove: useMutation({
@@ -557,3 +557,13 @@ export interface TradeBookRow {
 }
 export const useTradeBook = () =>
   useQuery({ queryKey: ['follow', 'trades'], queryFn: () => api<{ totalPnl: number; rows: TradeBookRow[] }>('/follow/trades'), refetchInterval: 5_000 });
+
+export interface ResizeResult {
+  symbol: string;
+  from: number;
+  to: number;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  ok: boolean;
+  error?: string;
+}

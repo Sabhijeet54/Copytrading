@@ -159,7 +159,14 @@ export class FollowerController {
     await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: user.id, targetType: 'StrategyFollower', targetId: row.id, metadata: { strategyId: id, ...dto }, client: clientInfo(req) });
     this.accountEvents.emit({ type: 'settings', brokerAccountId: account.id, userId: user.id });
     // New lot multiplier also applies to trades already booked (still open) in this strategy.
-    const resized = dto.applyToOpenTrades === false ? [] : await this.resizer.resizeOpen(row.id, user.id).catch(() => []);
+    let resized: Awaited<ReturnType<PositionResizeService['resizeOpen']>> = [];
+    if (dto.applyToOpenTrades !== false) {
+      try {
+        resized = await this.resizer.resizeOpen(row.id, user.id);
+      } catch (err) {
+        resized = [{ symbol: '—', from: 0, to: 0, side: 'BUY', quantity: 0, ok: false, error: (err as Error).message }];
+      }
+    }
     return { ...toStrategyFollowerView(row), resized };
   }
 

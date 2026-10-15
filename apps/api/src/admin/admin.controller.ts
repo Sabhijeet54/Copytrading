@@ -163,8 +163,8 @@ export class AdminController {
     const [u, s] = await Promise.all([this.prisma.user.findUnique({ where: { id } }), this.prisma.strategy.findUnique({ where: { id: strategyId } })]);
     if (!u) throw new NotFoundException('User not found');
     if (!s) throw new NotFoundException('Strategy not found');
-    const { follower, warning } = await this.assigner.assign(s, { ...dto, email: u.email }, me.id);
-    return { follower: toStrategyFollowerView(follower), warning };
+    const { follower, warning, resized } = await this.assigner.assign(s, { ...dto, email: u.email }, me.id);
+    return { follower: toStrategyFollowerView(follower), warning, resized };
   }
 
   /** Take one strategy away from one client (copying stops; history and positions are kept). */
@@ -220,8 +220,8 @@ export class AdminController {
   async assignClient(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: AssignClientDto) {
     const s = await this.prisma.strategy.findUnique({ where: { id } });
     if (!s) throw new NotFoundException('Strategy not found');
-    const { follower, warning } = await this.assigner.assign(s, dto, me.id);
-    return { follower: toStrategyFollowerView(follower), warning };
+    const { follower, warning, resized } = await this.assigner.assign(s, dto, me.id);
+    return { follower: toStrategyFollowerView(follower), warning, resized };
   }
 
   @Post('strategies/:id/pause')

@@ -4,6 +4,7 @@ import { AuditService } from '../audit/audit.service';
 import { PRISMA } from '../common/prisma/prisma.service';
 import { AccountEvents } from '../realtime/account-events';
 import type { AssignClientDto } from './trading.dto';
+import { PositionResizeService, type ResizeResult } from './position-resize.service';
 import { isRemoved, REMOVED_REASON } from './follower-access';
 
 /**
@@ -17,6 +18,7 @@ export class ClientAssignService {
     @Inject(PRISMA) private readonly prisma: PrismaClient,
     private readonly audit: AuditService,
     private readonly accountEvents: AccountEvents,
+    private readonly resizer: PositionResizeService,
   ) {}
 
   async assign(strategy: Strategy, dto: AssignClientDto, actorUserId: string) {
@@ -74,8 +76,18 @@ export class ClientAssignService {
       metadata: { assignedBy: actorUserId, strategyId: strategy.id, clientId: client.id, copy: canStart ? 'ON' : 'OFF' },
     });
     this.accountEvents.emit({ type: 'settings', brokerAccountId: account?.id ?? '', userId: client.id });
+    // A changed lot multiplier also applies to trades already booked (still open) in this strategy.
+    let resized: ResizeResult[] = [];
+    if (existing) {
+      try {
+        resized = await this.resizer.resizeOpen(row.id, actorUserId);
+      } catch (err) {
+        resized = [{ symbol: '—', from: 0, to: 0, side: 'BUY', quantity: 0, ok: false, error: (err as Error).message }];
+      }
+    }
     return {
       follower: row,
+      resized,
       warning: dto.startCopy && !canStart ? 'Assigned with copy OFF — the client has no connected broker account yet.' : null,
     };
   }
