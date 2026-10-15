@@ -190,6 +190,7 @@ export class RiskService implements OnApplicationBootstrap, OnModuleDestroy {
                 await adapter.placeOrder({ exchange: p.exchange, symbol: p.symbol, side, quantity: qty, orderType: 'MARKET', productType: p.productType, tag: 'ctpexit' });
               } else return;
               this.registry.applyClientFill(s.id, p.exchange, p.symbol, p.productType, -p.qty);
+              await this.logManualExit(s.brokerAccount!, p, side, qty, this.prices.get(instrumentKey(p.exchange, p.symbol)) ?? null, null);
               res.orders++;
             } catch (e) {
               res.failed++;
@@ -200,6 +201,28 @@ export class RiskService implements OnApplicationBootstrap, OnModuleDestroy {
         return res;
       }),
     );
+  }
+
+  /**
+   * Records an exit that did not go through the copy engine (client / master "Exit", exit-all, square-off,
+   * strategy exit). Today's P&L (ClientSummaryService) reads these so a closed position stops moving with LTP.
+   */
+  private async logManualExit(
+    account: Pick<BrokerAccount, 'id'>,
+    p: { exchange: Exchange; symbol: string; productType: ProductType },
+    side: 'BUY' | 'SELL',
+    quantity: number,
+    price: number | null,
+    actorUserId: string | null,
+    orderId: string | null = null,
+  ): Promise<void> {
+    await this.audit.log({
+      action: 'COPY_STOPPED',
+      actorUserId: actorUserId ?? undefined,
+      targetType: 'BrokerAccount',
+      targetId: account.id,
+      metadata: { manualExit: true, exchange: p.exchange, symbol: p.symbol, productType: p.productType, side, quantity, price, orderId },
+    });
   }
 
   /** Follower subscriptions using this account (their net copy positions must follow manual exits). */
@@ -221,14 +244,17 @@ export class RiskService implements OnApplicationBootstrap, OnModuleDestroy {
     const key = instrumentKey(pos.exchange, pos.symbol);
     let quantity = 0;
     let orderId: string | null = null;
+    let side: 'BUY' | 'SELL' = 'SELL';
+    let price: number | null = null;
     if (this.trading.isSimulated(account)) {
       const p = await this.prisma.position.findFirst({
         where: { brokerAccountId: account.id, isPaper: true, exchange: pos.exchange, symbol: pos.symbol, productType: pos.productType, quantity: { not: 0 } },
       });
       if (!p) throw new BadRequestException('No open position for this symbol');
-      const price = this.prices.get(key) ?? Number(p.lastPrice ?? p.averagePrice);
+      price = this.prices.get(key) ?? Number(p.lastPrice ?? p.averagePrice);
       quantity = Math.abs(p.quantity);
-      await this.engine.applyPaperFill(account.userId, account.id, { ...p, side: p.quantity > 0 ? 'SELL' : 'BUY' }, quantity, price);
+      side = p.quantity > 0 ? 'SELL' : 'BUY';
+      await this.engine.applyPaperFill(account.userId, account.id, { ...p, side }, quantity, price);
     } else {
       const adapter = await this.trading.adapterFor(account);
       const p = (await adapter.positions()).find(
@@ -236,6 +262,8 @@ export class RiskService implements OnApplicationBootstrap, OnModuleDestroy {
       );
       if (!p) throw new BadRequestException('No open position for this symbol at the broker');
       quantity = Math.abs(p.quantity);
+      side = p.quantity > 0 ? 'SELL' : 'BUY';
+      price = this.prices.get(key) ?? p.lastPrice;
       this.trading.assertOrderAllowed(account);
       ({ brokerOrderId: orderId } = await adapter.placeOrder({
         exchange: p.exchange,
@@ -248,13 +276,7 @@ export class RiskService implements OnApplicationBootstrap, OnModuleDestroy {
       }));
     }
     this.registry.clearPosition(await this.followerIdsOf(account.id), pos.exchange, pos.symbol, pos.productType);
-    await this.audit.log({
-      action: 'COPY_STOPPED',
-      actorUserId,
-      targetType: 'BrokerAccount',
-      targetId: account.id,
-      metadata: { manualExit: true, exchange: pos.exchange, symbol: pos.symbol, productType: pos.productType, quantity, orderId },
-    });
+    await this.logManualExit(account, pos, side, quantity, price, actorUserId, orderId);
     this.realtime.toUser(account.userId, WsEvent.POSITION_UPDATED, { symbol: pos.symbol, status: 'EXITED', quantity });
     return { orderId, quantity };
   }
@@ -279,6 +301,7 @@ export class RiskService implements OnApplicationBootstrap, OnModuleDestroy {
         const price = this.prices.get(instrumentKey(p.exchange, p.symbol)) ?? Number(p.lastPrice ?? p.averagePrice);
         await this.engine.applyPaperFill(account.userId, account.id, { ...p, side: p.quantity > 0 ? 'SELL' : 'BUY' }, Math.abs(p.quantity), price);
         this.registry.clearPosition(await this.followerIdsOf(account.id), p.exchange, p.symbol, p.productType);
+        await this.logManualExit(account, p, p.quantity > 0 ? 'SELL' : 'BUY', Math.abs(p.quantity), price, null);
         res.orders++;
       }
       return res;
@@ -295,9 +318,10 @@ export class RiskService implements OnApplicationBootstrap, OnModuleDestroy {
       positions.map(async (p) => {
         try {
           this.trading.assertOrderAllowed(account);
-          await adapter.placeOrder({ exchange: p.exchange, symbol: p.symbol, side: p.quantity > 0 ? 'SELL' : 'BUY', quantity: Math.abs(p.quantity), orderType: 'MARKET', productType: p.productType, tag: 'ctpsqoff' });
+          const { brokerOrderId } = await adapter.placeOrder({ exchange: p.exchange, symbol: p.symbol, side: p.quantity > 0 ? 'SELL' : 'BUY', quantity: Math.abs(p.quantity), orderType: 'MARKET', productType: p.productType, tag: 'ctpsqoff' });
           // Keep the copy engine's net position in step, so a later master exit never double-exits.
           this.registry.clearPosition(await this.followerIdsOf(account.id), p.exchange, p.symbol, p.productType);
+          await this.logManualExit(account, p, p.quantity > 0 ? 'SELL' : 'BUY', Math.abs(p.quantity), this.prices.get(instrumentKey(p.exchange, p.symbol)) ?? p.lastPrice, null, brokerOrderId);
           res.orders++;
         } catch (e) {
           res.failed++;

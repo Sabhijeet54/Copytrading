@@ -151,7 +151,7 @@ export default function AdminUsersPage() {
                       </div>
                     ) : (
                       <button type="button" className="text-primary hover:underline" onClick={() => setStratUser(u)}>
-                        + Assign
+                        + Assign strategy
                       </button>
                     )}
                   </TableCell>
@@ -181,8 +181,8 @@ export default function AdminUsersPage() {
                         <KeyRound />
                       </Button>
                       {u.role === 'FOLLOWER' ? (
-                        <Button size="icon" variant="ghost" className="size-8" title="Strategies" aria-label={`Strategies for ${u.name}`} onClick={() => setStratUser(u)}>
-                          <Layers />
+                        <Button size="sm" variant="outline" className="h-8" title="Assign strategies" onClick={() => setStratUser(u)}>
+                          <Layers /> Strategy
                         </Button>
                       ) : null}
                     </div>

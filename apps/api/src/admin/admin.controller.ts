@@ -8,6 +8,7 @@ import { RiskService } from '../trading/risk.service';
 import { ClientAssignService } from '../trading/client-assign.service';
 import { AssignClientDto, AssignStrategyDto, EditSignalDto, SignalTpSlDto } from '../trading/trading.dto';
 import { allocationLabel, isRemoved } from '../trading/follower-access';
+import { clientDirectory } from '../trading/client-directory';
 import { SignalService } from '../trading/signal.service';
 import { toStrategyFollowerView } from '../common/mappers';
 import { PRISMA } from '../common/prisma/prisma.service';
@@ -121,6 +122,12 @@ export class AdminController {
   @Patch('signals/:id/tpsl')
   setSignalTpSl(@Param('id') id: string, @Body() dto: SignalTpSlDto) {
     return this.signals.setTpSl(null, id, dto.targetPrice ?? null, dto.stopLossPrice ?? null);
+  }
+
+  /** Client picker for "Assign client" on the Strategies page. */
+  @Get('client-directory')
+  clientDirectory(@Query('search') search?: string, @Query('strategyId') strategyId?: string) {
+    return clientDirectory(this.prisma, search, strategyId);
   }
 
   // --------------------------------------------------------------- per-client strategy access

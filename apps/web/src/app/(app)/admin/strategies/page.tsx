@@ -1,6 +1,7 @@
 'use client';
 
-import { PauseCircle, StopCircle, Users } from 'lucide-react';
+import { PauseCircle, StopCircle, UserPlus, Users } from 'lucide-react';
+import { AssignClientDialog } from '@/components/assign-client-dialog';
 import Link from 'next/link';
 import { useState } from 'react';
 import { toast } from 'sonner';
@@ -33,7 +34,7 @@ function FollowersDialog({ strategy, onClose }: { strategy: { id: string; name: 
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>{strategy?.name} — followers</DialogTitle>
-            <DialogDescription>Clients who have this strategy and their copy status. Assign or remove strategies per client on the Users page.</DialogDescription>
+            <DialogDescription>Clients who have this strategy and their copy status. Use “Assign client” to add more.</DialogDescription>
           </DialogHeader>
           <div className="max-h-[60vh] overflow-y-auto">
             {q.isLoading ? (
@@ -98,10 +99,11 @@ export default function AdminStrategiesPage() {
   const pause = useAdminAction<{ reason: string }>('POST', (id) => `/admin/strategies/${id}/pause`);
   const [pauseTarget, setPauseTarget] = useState<{ id: string; name: string } | null>(null);
   const [followersOf, setFollowersOf] = useState<{ id: string; name: string } | null>(null);
+  const [assignTo, setAssignTo] = useState<{ id: string; name: string } | null>(null);
 
   return (
     <>
-      <PageHeader title="Strategies" description="Master strategies and their client counts. Give a strategy to a client from Users → Strategies." />
+      <PageHeader title="Strategies" description="Master strategies and their client counts. Use “Assign client” to give a strategy to a client." />
       <Card className="overflow-hidden">
         <FilterBar onReset={list.reset} active={list.active}>
           <Field label="Search" className="grid w-56 gap-1.5">
@@ -158,8 +160,11 @@ export default function AdminStrategiesPage() {
                   <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(s.createdAt)}</TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-2">
+                      <Button size="sm" onClick={() => setAssignTo({ id: s.id, name: s.name })}>
+                        <UserPlus /> Assign client
+                      </Button>
                       <Button size="sm" variant="ghost" onClick={() => setFollowersOf({ id: s.id, name: s.name })}>
-                        <Users /> Followers
+                        <Users /> Clients
                       </Button>
                       {s.status === 'ACTIVE' ? (
                         <Button size="sm" variant="outline" onClick={() => setPauseTarget({ id: s.id, name: s.name })}>
@@ -176,6 +181,7 @@ export default function AdminStrategiesPage() {
         {q.data ? <Pagination page={list.page} pageSize={list.pageSize} total={q.data.total} onPage={list.setPage} /> : null}
       </Card>
       <FollowersDialog strategy={followersOf} onClose={() => setFollowersOf(null)} />
+      <AssignClientDialog strategy={assignTo} scope="admin" open={assignTo !== null} onOpenChange={(o) => !o && setAssignTo(null)} />
       <ReasonDialog
         open={pauseTarget !== null}
         onOpenChange={(o) => !o && setPauseTarget(null)}

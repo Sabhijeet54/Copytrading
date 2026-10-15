@@ -21,6 +21,7 @@ import { AssignClientDto, ClientHistoryQueryDto, ExitPositionDto, MasterOrderDto
 import { SignalService } from './signal.service';
 import { startOfTradingDayIST } from '../admin/admin.service';
 import { ClientAssignService } from './client-assign.service';
+import { clientDirectory } from './client-directory';
 import { allocationLabel, ClientSummaryService, isRemoved } from './client-summary.service';
 import { licenceStatus } from '../common/mappers';
 import { overlayLivePrices, paperPositionView } from './price-overlay';
@@ -192,6 +193,12 @@ export class MasterController {
       if (err instanceof BrokerApiError) throw new BadRequestException(await this.trading.handleBrokerError(account, err));
       throw err;
     }
+  }
+
+  /** Client picker for "Assign client": active client accounts (search by name / email / mobile). */
+  @Get('client-directory')
+  clientDirectory(@Query('search') search?: string, @Query('strategyId') strategyId?: string) {
+    return clientDirectory(this.prisma, search, strategyId);
   }
 
   /** Every client of my strategies (one row per client) with broker status, today's P&L and subscriptions. */

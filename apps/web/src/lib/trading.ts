@@ -479,3 +479,20 @@ export function useAdminSignalMutations() {
     remove: useMutation({ mutationFn: (id: string) => api(`/admin/signals/${id}`, { method: 'DELETE' }), onSuccess: done }),
   };
 }
+
+// ------------------------------------------------------------ client picker (assign client)
+
+export interface DirectoryClient {
+  id: string;
+  name: string;
+  email: string;
+  mobile: string | null;
+  assigned: boolean;
+}
+export const useClientDirectory = (scope: 'master' | 'admin', search: string, strategyId: string | null, enabled = true) =>
+  useQuery({
+    queryKey: [scope, 'client-directory', search.trim(), strategyId],
+    queryFn: () => api<DirectoryClient[]>(`/${scope}/client-directory`, { query: { search: search.trim() || undefined, strategyId: strategyId ?? undefined } }),
+    enabled,
+    placeholderData: (prev) => prev,
+  });

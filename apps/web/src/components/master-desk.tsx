@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { LogOut, Pause, Pencil, Play, Plus, Users } from 'lucide-react';
+import { LogOut, Pause, Pencil, Play, Plus, UserPlus, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import type { StrategyView } from '@ctp/types';
-import { AllocationFields, type AllocState, allocToInput, defaultAlloc } from '@/components/allocation-fields';
+import { AssignClientDialog } from '@/components/assign-client-dialog';
 import { ExitButton, LiveAccountCard, PaperPositionsCard, Pnl } from '@/components/live-account';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
@@ -19,7 +19,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { brokerLabel, formatDateTime, formatINR, humanize } from '@/lib/format';
 import {
   type StrategyInput,
-  useAssignClient,
   useRemoveClient,
   useMasterLive,
   useMasterTrade,
@@ -156,65 +155,6 @@ export function StrategyDialog({ open, onOpenChange, strategy }: { open: boolean
 }
 
 // ---------------------------------------------------------------- followers
-function AssignClientDialog({ strategy, open, onOpenChange }: { strategy: StrategyView; open: boolean; onOpenChange: (o: boolean) => void }) {
-  const assign = useAssignClient(strategy.id);
-  const [email, setEmail] = useState('');
-  const [alloc, setAlloc] = useState<AllocState>(defaultAlloc());
-  const [startCopy, setStartCopy] = useState(true);
-  useEffect(() => {
-    if (!open) return;
-    setEmail('');
-    setAlloc(defaultAlloc());
-    setStartCopy(true);
-  }, [open]);
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const body = allocToInput(alloc);
-    if (typeof body === 'string') return void toast.error(body);
-    if (!email.trim()) return void toast.error('Client email is required');
-    assign.mutate(
-      { ...body, email: email.trim(), startCopy },
-      {
-        onSuccess: (r) => {
-          if (r.warning) toast.warning(r.warning);
-          else toast.success(`Client assigned to ${strategy.name}`);
-          onOpenChange(false);
-        },
-        onError: (err) => toast.error(err.message),
-      },
-    );
-  };
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
-        <form onSubmit={submit} className="grid gap-4">
-          <DialogHeader>
-            <DialogTitle>Assign client · {strategy.name}</DialogTitle>
-            <DialogDescription>Only assigned clients can see and copy this strategy. The client must already have an account.</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-1.5">
-            <Label htmlFor="assign-email">Client email</Label>
-            <Input id="assign-email" type="email" autoComplete="off" value={email} onChange={(e) => setEmail(e.target.value)} required />
-          </div>
-          <AllocationFields id="assign" value={alloc} onChange={setAlloc} />
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" className="size-4" checked={startCopy} onChange={(e) => setStartCopy(e.target.checked)} />
-            Start copying now (only if the client&apos;s broker is connected)
-          </label>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={assign.isPending}>
-              {assign.isPending ? 'Assigning…' : 'Assign client'}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 export function FollowersCard({ strategy }: { strategy: StrategyView }) {
   const q = useStrategyFollowers(strategy.id);
   const remove = useRemoveClient(strategy.id);
@@ -310,7 +250,7 @@ export function FollowersCard({ strategy }: { strategy: StrategyView }) {
           </TableBody>
         </Table>
       </CardContent>
-      <AssignClientDialog strategy={strategy} open={assignOpen} onOpenChange={setAssignOpen} />
+      <AssignClientDialog strategy={strategy} scope="master" open={assignOpen} onOpenChange={setAssignOpen} />
     </Card>
   );
 }
@@ -442,6 +382,7 @@ export function StrategiesCard({
   const status = useStrategyStatus();
   const exitAll = useExitStrategy();
   const [exitTarget, setExitTarget] = useState<StrategyView | null>(null);
+  const [assignTo, setAssignTo] = useState<StrategyView | null>(null);
   return (
     <Card>
       <CardHeader>
@@ -484,6 +425,9 @@ export function StrategiesCard({
                   <TableCell className="text-right tabular-nums">{formatINR(s.masterCapital)}</TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
                     <div className="flex justify-end gap-1">
+                      <Button size="sm" variant="outline" onClick={() => setAssignTo(s)}>
+                        <UserPlus /> Assign client
+                      </Button>
                       <Button size="sm" variant="ghost" title="Clients" onClick={() => onSelect(s.id)}>
                         <Users />
                       </Button>
@@ -510,6 +454,7 @@ export function StrategiesCard({
           </TableBody>
         </Table>
       </CardContent>
+      <AssignClientDialog strategy={assignTo} scope="master" open={assignTo !== null} onOpenChange={(o) => !o && setAssignTo(null)} />
       <Dialog open={!!exitTarget} onOpenChange={(o) => !o && setExitTarget(null)}>
         <DialogContent>
           <DialogHeader>

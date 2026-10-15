@@ -200,7 +200,8 @@ export class BrokerSessionService {
       // 2) Upsert this user's row for the broker.
       const existing = await tx.brokerAccount.upsert({
         where: { userId_broker: { userId, broker } },
-        create: { userId, broker, brokerClientId: s.brokerClientId, status: 'PENDING', mode },
+        // A new client account starts in PAPER when the platform default is paper (PAPER_MODE=true); the client switches to LIVE.
+        create: { userId, broker, brokerClientId: s.brokerClientId, status: 'PENDING', mode, isPaper: mode === 'TRADING' && this.config.PAPER_MODE },
         update: {},
       });
       if (existing.status === 'CONNECTED' && existing.brokerClientId && existing.brokerClientId !== s.brokerClientId) {

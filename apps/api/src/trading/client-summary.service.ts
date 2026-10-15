@@ -61,6 +61,34 @@ export class ClientSummaryService {
       book.set(o.strategyFollowerId, m);
       trades.set(o.strategyFollowerId, (trades.get(o.strategyFollowerId) ?? 0) + 1);
     }
+    // Exits done outside the copy engine (client / master "Exit", exit-all, square-off): close the copied net
+    // quantity at the exit price, so a closed position stops moving with the LTP.
+    if (book.size) {
+      const accounts = await this.prisma.brokerAccount.findMany({ where: { userId, mode: 'TRADING' }, select: { id: true } });
+      const exits = accounts.length
+        ? await this.prisma.auditLog.findMany({
+            where: { action: 'COPY_STOPPED', targetType: 'BrokerAccount', targetId: { in: accounts.map((a) => a.id) }, createdAt: { gte: since } },
+            select: { metadata: true },
+            orderBy: { createdAt: 'asc' },
+          })
+        : [];
+      for (const e of exits) {
+        const m = e.metadata as { manualExit?: boolean; exchange?: string; symbol?: string; side?: string; quantity?: number; price?: number | null } | null;
+        if (!m?.manualExit || !m.exchange || !m.symbol || !m.quantity) continue;
+        const inst = `${m.exchange}:${m.symbol}`;
+        const exitSign = m.side === 'BUY' ? 1 : -1; // SELL closes a long (net > 0)
+        let left = m.quantity;
+        for (const fm of book.values()) {
+          const cur = fm.get(inst);
+          if (!cur || left <= 0 || cur.net === 0 || Math.sign(cur.net) === exitSign) continue;
+          const q = Math.min(left, Math.abs(cur.net));
+          const px = m.price ?? this.prices.get(instrumentKey(m.exchange, m.symbol)) ?? cur.last;
+          cur.cash -= exitSign * q * px;
+          cur.net += exitSign * q;
+          left -= q;
+        }
+      }
+    }
     const pnlOf = (followerId: string) => {
       let pnl = 0;
       for (const [inst, v] of book.get(followerId) ?? []) {

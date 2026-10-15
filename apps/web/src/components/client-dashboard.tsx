@@ -102,9 +102,7 @@ function TradingModeSwitch({ b }: { b: NonNullable<Data['broker']> }) {
   const setMode = useSetTradingMode();
   const [confirmLive, setConfirmLive] = useState(false);
   const live = b.tradingMode === 'LIVE';
-  const locked = b.paperForced;
   const flip = () => {
-    if (locked) return void toast.info('Live trading is switched off on this platform (paper mode). Ask your admin to enable it.');
     if (live) setMode.mutate('PAPER', { onSuccess: () => toast.success('Switched to PAPER — copied trades are now simulated'), onError: (e) => toast.error(e.message) });
     else setConfirmLive(true);
   };
@@ -119,8 +117,8 @@ function TradingModeSwitch({ b }: { b: NonNullable<Data['broker']> }) {
           aria-label="Live trading"
           onClick={flip}
           disabled={setMode.isPending}
-          title={locked ? 'Platform is in paper mode' : live ? 'Switch to paper trading' : 'Switch to live trading'}
-          className={cn('flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-muted', locked && 'cursor-not-allowed opacity-70')}
+          title={live ? 'Switch to paper trading' : 'Switch to live trading'}
+          className="flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-muted"
         >
           <span className={cn(!live && 'font-semibold text-foreground')}>Paper</span>
           <span className={cn('relative inline-block h-4 w-7 rounded-full transition-colors', live ? 'bg-emerald-600' : 'bg-muted-foreground/40')}>
@@ -130,7 +128,7 @@ function TradingModeSwitch({ b }: { b: NonNullable<Data['broker']> }) {
         </button>
       </div>
       <p className="text-[11px] text-muted-foreground">
-        {locked ? 'Platform is in paper mode — no real orders for anyone.' : live ? 'Copied trades go to your broker as real orders.' : 'Copied trades are simulated — no real orders.'}
+        {live ? 'Copied trades go to your broker as real orders.' : 'Copied trades are simulated — no real orders.'}
       </p>
       <Dialog open={confirmLive} onOpenChange={setConfirmLive}>
         <DialogContent className="max-w-sm">

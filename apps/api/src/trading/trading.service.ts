@@ -1,4 +1,6 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import type Redis from 'ioredis';
+import { REDIS } from '../common/redis/redis.module';
 import type { BrokerAccount, PrismaClient } from '@ctp/database';
 import { PRISMA } from '../common/prisma/prisma.service';
 import { API_CONFIG, ApiConfig } from '../config/config.module';
@@ -21,17 +23,44 @@ export interface LiveAccountData {
 
 /** Builds broker adapters from stored (encrypted) sessions and reads live account data. */
 @Injectable()
-export class TradingService {
+export class TradingService implements OnModuleInit {
+  private readonly logger = new Logger('TradingService');
 
   constructor(
     @Inject(PRISMA) private readonly prisma: PrismaClient,
     @Inject(API_CONFIG) private readonly config: ApiConfig,
     private readonly sessions: BrokerSessionService,
+    @Inject(REDIS) private readonly redis: Redis,
   ) {}
 
-  /** True when this account must never receive a real order. */
-  isSimulated(account: Pick<BrokerAccount, 'broker' | 'isPaper'>): boolean {
-    return this.config.PAPER_MODE || account.isPaper || account.broker === 'MOCK';
+  /**
+   * One-time switch to per-client paper / live: before this, PAPER_MODE=true forced every account to paper.
+   * To keep that behaviour, every client trading account starts in PAPER once; clients then choose Live
+   * themselves from the dashboard toggle. Runs only when PAPER_MODE=true and only once (Redis marker).
+   */
+  async onModuleInit(): Promise<void> {
+    if (!this.config.PAPER_MODE || this.config.NODE_ENV === 'test') return;
+    const marker = 'ctp:migrate:client-paper-switch:v1';
+    try {
+      if (await this.redis.get(marker)) return;
+      const r = await this.prisma.brokerAccount.updateMany({ where: { mode: 'TRADING', broker: { not: 'MOCK' }, isPaper: false }, data: { isPaper: true } });
+      await this.redis.set(marker, new Date().toISOString());
+      if (r.count) this.logger.log(`Paper/live switch: ${r.count} client account(s) start in PAPER — clients can switch to LIVE themselves`);
+    } catch (err) {
+      this.logger.error(`Paper/live switch migration failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * True when this account must never receive a real order.
+   *  - MOCK accounts and accounts switched to Paper (isPaper) are always simulated.
+   *  - Client TRADING accounts: the client's own Paper / Live switch decides (isPaper).
+   *  - Everything else (master DATA_ONLY accounts, platform-level checks without a mode) follows PAPER_MODE.
+   */
+  isSimulated(account: Pick<BrokerAccount, 'broker' | 'isPaper'> & Partial<Pick<BrokerAccount, 'mode'>>): boolean {
+    if (account.broker === 'MOCK' || account.isPaper) return true;
+    if (account.mode === 'TRADING') return false;
+    return this.config.PAPER_MODE;
   }
 
   /** Hard guard used before every order: DATA_ONLY (master) accounts can never place orders. */

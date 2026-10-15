@@ -184,7 +184,7 @@ export class CopyReconcilerService implements OnApplicationBootstrap, OnModuleDe
   // ------------------------------------------------------------ 3. retry queue
 
   private async retry(account: BrokerAccount, adapter: BrokerAdapter, o: CopyOrder, book: BrokerOrder[], linked: Set<string>): Promise<boolean> {
-    if (this.config.PAPER_MODE) return false;
+    if (this.trading.isSimulated(account)) return false;
     if (await this.redis.get(RedisKeys.copyHalted)) return false; // kill switch
     const sign = o.side === 'BUY' ? 1 : -1;
     if (o.isExit) {

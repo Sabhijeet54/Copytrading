@@ -8,147 +8,104 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
-import { brokerLabel, formatINR, humanize } from '@/lib/format';
+import { brokerLabel, humanize } from '@/lib/format';
 import { useMyBrokerAccounts } from '@/lib/queries';
 import { type FollowInput, type StrategyWithSub, useFollow } from '@/lib/trading';
 
-const optNum = (v: string) => (v.trim() === '' ? undefined : Number(v));
+const PRESETS = ['1', '2', '3', '5'];
+const num = (v: string | number | null | undefined) => (v == null || v === '' ? undefined : Number(v));
 
+/**
+ * Client settings for one assigned strategy — kept simple: broker account + lot multiplier only.
+ * Limits set by the admin (max loss / day etc.) are kept unchanged when the client saves.
+ */
 export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClose: () => void }) {
   const accounts = useMyBrokerAccounts();
   const follow = useFollow();
-  const [f, setF] = useState({ brokerAccountId: '', mode: 'CAPITAL_PERCENTAGE', percent: '1', amount: '', fixed: '', fixedLots: '', maxQty: '', maxValue: '', maxLots: '', maxLoss: '', maxTrades: '', eq: true, fo: true });
+  const [brokerAccountId, setBrokerAccountId] = useState('');
+  const [mult, setMult] = useState('1');
   useEffect(() => {
     if (!s) return;
     const sub = s.subscription;
     const firstConnected = accounts.data?.find((a) => a.status === 'CONNECTED' && a.broker !== 'MOCK') ?? accounts.data?.[0];
-    setF({
-      brokerAccountId: sub?.brokerAccountId ?? firstConnected?.id ?? '',
-      mode: sub?.allocationMode ?? 'CAPITAL_PERCENTAGE',
-      percent: sub?.allocationPercent ? String(+(Number(sub.allocationPercent) / 100).toFixed(2)) : '1',
-      amount: sub?.allocationAmount ? String(Number(sub.allocationAmount)) : '',
-      fixed: sub?.fixedQuantity ? String(sub.fixedQuantity) : '',
-      maxQty: sub?.maxQuantity ? String(sub.maxQuantity) : '',
-      maxValue: sub?.maxTradeValue ? String(Number(sub.maxTradeValue)) : '',
-      fixedLots: sub?.fixedLots ? String(sub.fixedLots) : '',
-      maxLots: sub?.maxLots ? String(sub.maxLots) : '',
-      maxLoss: sub?.maxDailyLoss ? String(Number(sub.maxDailyLoss)) : '',
-      maxTrades: sub?.maxTradesPerDay ? String(sub.maxTradesPerDay) : '',
-      eq: !sub?.allowedSegments?.length || sub.allowedSegments.includes('EQ'),
-      fo: !sub?.allowedSegments?.length || sub.allowedSegments.includes('FO'),
-    });
+    setBrokerAccountId(sub?.brokerAccountId ?? firstConnected?.id ?? '');
+    setMult(sub?.allocationMode === 'CAPITAL_PERCENTAGE' && sub.allocationPercent ? String(+(Number(sub.allocationPercent) / 100).toFixed(2)) : sub?.fixedLots ? String(sub.fixedLots) : '1');
   }, [s, accounts.data]);
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF((p) => ({ ...p, [k]: e.target.value }));
+
+  const m = Number(mult);
+  const valid = m > 0 && m <= 10;
+
+  const save = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!s || !valid) return void toast.error('Lot multiplier must be between 0.01 and 10');
+    const sub = s.subscription;
+    const body: FollowInput = {
+      brokerAccountId,
+      allocationMode: 'CAPITAL_PERCENTAGE',
+      allocationPercent: Math.round(m * 10000) / 100,
+      // keep the limits the admin set
+      maxQuantity: num(sub?.maxQuantity),
+      maxTradeValue: num(sub?.maxTradeValue),
+      maxLots: num(sub?.maxLots),
+      maxDailyLoss: num(sub?.maxDailyLoss),
+      maxTradesPerDay: num(sub?.maxTradesPerDay),
+      allowedSegments: (sub?.allowedSegments ?? []) as ('EQ' | 'FO')[],
+    };
+    follow.mutate({ strategyId: s.id, body }, { onSuccess: () => (toast.success(`Saved — ${m}× lots`), onClose()), onError: (err) => toast.error(err.message) });
+  };
 
   return (
     <Dialog open={!!s} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
+      <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Follow {s?.name}</DialogTitle>
-          <DialogDescription>Choose how much of each master trade is copied into your account. Copying starts only when you press Start.</DialogDescription>
+          <DialogTitle>{s?.name}</DialogTitle>
+          <DialogDescription>How many lots to copy for every master trade. Copying starts only when you press Start.</DialogDescription>
         </DialogHeader>
         {accounts.data && accounts.data.length === 0 ? (
           <p className="text-sm">
-            Connect your broker first on the <Link className="underline" href="/broker">Broker connection</Link> page.
+            Connect your broker first on the{' '}
+            <Link className="underline" href="/broker">
+              Broker connection
+            </Link>{' '}
+            page.
           </p>
         ) : (
-          <form
-            className="grid gap-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const body: FollowInput = {
-                brokerAccountId: f.brokerAccountId,
-                allocationMode: f.mode as FollowInput['allocationMode'],
-                allocationPercent: f.mode === 'CAPITAL_PERCENTAGE' && optNum(f.percent) ? Math.round(Number(f.percent) * 10000) / 100 : undefined,
-                allocationAmount: f.mode === 'PROPORTIONAL' ? optNum(f.amount) : undefined,
-                fixedQuantity: f.mode === 'FIXED_QUANTITY' ? optNum(f.fixed) : undefined,
-                maxQuantity: optNum(f.maxQty),
-                maxTradeValue: optNum(f.maxValue),
-                fixedLots: f.mode === 'FIXED_QUANTITY' ? optNum(f.fixedLots) : undefined,
-                maxLots: optNum(f.maxLots),
-                maxDailyLoss: optNum(f.maxLoss),
-                maxTradesPerDay: optNum(f.maxTrades),
-                allowedSegments: f.eq && f.fo ? [] : [...(f.eq ? (['EQ'] as const) : []), ...(f.fo ? (['FO'] as const) : [])],
-              };
-              if (!f.eq && !f.fo) return void toast.error('Allow at least one segment (EQ or F&O)');
-              follow.mutate({ strategyId: s!.id, body }, { onSuccess: () => (toast.success('Saved — press Start to begin copying'), onClose()), onError: (err) => toast.error(err.message) });
-            }}
-          >
-            <div className="grid gap-1.5">
-              <Label>Broker account</Label>
-              <Select value={f.brokerAccountId} onChange={set('brokerAccountId')} required>
-                {accounts.data?.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {brokerLabel(a.broker)} {a.brokerClientId ?? ''} — {humanize(a.status)}
-                  </option>
+          <form className="grid gap-4" onSubmit={save}>
+            {(accounts.data?.length ?? 0) > 1 ? (
+              <div className="grid gap-1.5">
+                <Label htmlFor="fd-acc">Broker account</Label>
+                <Select id="fd-acc" value={brokerAccountId} onChange={(e) => setBrokerAccountId(e.target.value)} required>
+                  {accounts.data?.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {brokerLabel(a.broker)} {a.brokerClientId ?? ''} — {humanize(a.status)}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            ) : null}
+            <div className="grid gap-2">
+              <Label htmlFor="fd-mult">Lot multiplier</Label>
+              <div className="flex flex-wrap gap-2">
+                {PRESETS.map((p) => (
+                  <Button key={p} type="button" size="sm" variant={mult === p ? 'default' : 'outline'} onClick={() => setMult(p)}>
+                    {p}×
+                  </Button>
                 ))}
-              </Select>
-            </div>
-            <div className="grid gap-1.5">
-              <Label>Allocation</Label>
-              <Select value={f.mode} onChange={set('mode')}>
-                <option value="CAPITAL_PERCENTAGE">Lot multiplier (× master lots)</option>
-                <option value="PROPORTIONAL">My capital (proportional to master)</option>
-                <option value="FIXED_QUANTITY">Fixed lots / quantity per trade</option>
-              </Select>
-            </div>
-            {f.mode === 'CAPITAL_PERCENTAGE' ? (
-              <div className="grid gap-1.5">
-                <Label>Lot multiplier (×)</Label>
-                <Input type="number" min={0.01} max={10} step="any" value={f.percent} onChange={set('percent')} required />
-                <p className="text-xs text-muted-foreground">1 = same lots as master, 2 = double lots, 0.5 = half (rounded down to whole lots)</p>
+                <Input id="fd-mult" className="w-24" type="number" min={0.01} max={10} step="any" inputMode="decimal" value={mult} onChange={(e) => setMult(e.target.value)} required />
               </div>
-            ) : f.mode === 'PROPORTIONAL' ? (
-              <div className="grid gap-1.5">
-                <Label>My capital for this strategy (₹)</Label>
-                <Input type="number" min={1} value={f.amount} onChange={set('amount')} required />
-                <p className="text-xs text-muted-foreground">Master capital: {formatINR(s?.masterCapital)}</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-4">
-                <div className="grid gap-1.5">
-                  <Label>Lots per trade</Label>
-                  <Input type="number" min={1} value={f.fixedLots} onChange={set('fixedLots')} placeholder="e.g. 1" />
-                </div>
-                <div className="grid gap-1.5">
-                  <Label>or Quantity per trade</Label>
-                  <Input type="number" min={1} value={f.fixed} onChange={set('fixed')} required={!f.fixedLots} />
-                </div>
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="grid gap-1.5">
-                <Label>Max qty / order</Label>
-                <Input type="number" min={1} value={f.maxQty} onChange={set('maxQty')} />
-              </div>
-              <div className="grid gap-1.5">
-                <Label>Max order value ₹</Label>
-                <Input type="number" min={0} value={f.maxValue} onChange={set('maxValue')} />
-              </div>
-              <div className="grid gap-1.5">
-                <Label>Max lots / order</Label>
-                <Input type="number" min={1} value={f.maxLots} onChange={set('maxLots')} />
-              </div>
-              <div className="grid gap-1.5">
-                <Label>Max trades / day</Label>
-                <Input type="number" min={1} value={f.maxTrades} onChange={set('maxTrades')} />
-              </div>
-              <div className="col-span-2 grid gap-1.5">
-                <Label>Max loss per day ₹</Label>
-                <Input type="number" min={0} value={f.maxLoss} onChange={set('maxLoss')} placeholder="Copy stops and positions exit when hit" />
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-4 text-sm">
-              <span className="text-muted-foreground">Segments:</span>
-              <label className="flex items-center gap-1.5">
-                <input type="checkbox" checked={f.eq} onChange={(e) => setF((p) => ({ ...p, eq: e.target.checked }))} /> Equity (EQ)
-              </label>
-              <label className="flex items-center gap-1.5">
-                <input type="checkbox" checked={f.fo} onChange={(e) => setF((p) => ({ ...p, fo: e.target.checked }))} /> F&amp;O
-              </label>
+              <p className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+                {valid ? (
+                  <>
+                    Master 1 lot → you <strong className="text-foreground">{Math.floor(m)} lot{Math.floor(m) === 1 ? '' : 's'}</strong> · master 2 lots → you{' '}
+                    <strong className="text-foreground">{Math.floor(2 * m)} lots</strong> (rounded down to whole lots).
+                  </>
+                ) : (
+                  'Enter a multiplier between 0.01 and 10'
+                )}
+              </p>
             </div>
             <DialogFooter>
-              <Button type="submit" disabled={follow.isPending || !f.brokerAccountId}>
+              <Button type="submit" disabled={follow.isPending || !brokerAccountId || !valid}>
                 {follow.isPending ? 'Saving…' : 'Save'}
               </Button>
             </DialogFooter>
@@ -158,4 +115,3 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
     </Dialog>
   );
 }
-

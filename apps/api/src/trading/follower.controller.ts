@@ -48,7 +48,6 @@ export class FollowerController {
     const now = Date.now();
     const exp = me?.licenceExpiresAt?.getTime() ?? null;
     const primary = accounts.find((a) => a.status === 'CONNECTED') ?? accounts[0] ?? null;
-    const paperForced = this.trading.isSimulated({ broker: 'ZERODHA', isPaper: false });
     return {
       todayPnl: day.todayPnl,
       broker: primary
@@ -59,8 +58,8 @@ export class FollowerController {
             status: primary.status,
             connected: primary.status === 'CONNECTED' && (!primary.tokenExpiresAt || primary.tokenExpiresAt.getTime() > now),
             tradingMode: this.trading.isSimulated(primary) ? 'PAPER' : 'LIVE',
-            /** true = the server runs with PAPER_MODE=true: nobody can switch to live. */
-            paperForced,
+            /** Kept for older web builds: the client can always switch now. */
+            paperForced: false,
           }
         : null,
       subscriptions: {
@@ -81,15 +80,12 @@ export class FollowerController {
   }
 
   /**
-   * Paper / live switch for my trading account. Paper = copied trades are simulated, no real broker orders.
-   * Live is impossible while the server runs with PAPER_MODE=true.
+   * Paper / live switch for my trading account (isPaper = true / false), chosen by the client himself.
+   * Paper = copied trades are simulated, no real broker orders. Live = real orders in my broker account.
    */
   @HttpCode(HttpStatus.OK)
   @Post('trading-mode')
   async tradingMode(@CurrentUser() user: RequestUser, @Body() dto: TradingModeDto, @Req() req: Request) {
-    if (dto.mode === 'LIVE' && this.trading.isSimulated({ broker: 'ZERODHA', isPaper: false })) {
-      throw new BadRequestException('Live trading is switched off on this platform (paper mode). Ask your admin to enable live trading.');
-    }
     const accounts = await this.prisma.brokerAccount.findMany({ where: { userId: user.id, broker: { not: 'MOCK' }, mode: 'TRADING' } });
     if (!accounts.length) throw new BadRequestException('Connect your broker first.');
     await this.prisma.brokerAccount.updateMany({ where: { id: { in: accounts.map((a) => a.id) } }, data: { isPaper: dto.mode === 'PAPER' } });
@@ -237,8 +233,10 @@ export class FollowerController {
       }),
       this.summary.today(user.id),
     ]);
+    const myAccounts = await this.prisma.brokerAccount.findMany({ where: { userId: user.id, broker: { not: 'MOCK' }, mode: 'TRADING' } });
     return {
-      paperMode: this.trading.isSimulated({ broker: 'ZERODHA', isPaper: false }),
+      /** true = my trading account is on Paper (my own switch). */
+      paperMode: myAccounts.length > 0 && myAccounts.every((a) => this.trading.isSimulated(a)),
       todayPnl: day.todayPnl,
       live: overlayLivePrices(live, this.prices, this.feed),
       paperPositions: paper.map((p) => paperPositionView(p, this.prices, this.feed)),
