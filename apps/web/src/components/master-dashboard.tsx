@@ -27,7 +27,7 @@ export function MasterDashboard() {
 
   return (
     <div className="mb-6 grid gap-4">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="fox-tiles grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard label="Active strategies" value={`${active} / ${list.length}`} loading={strategies.isLoading} icon={<Layers />} />
         <StatCard label="Clients copying" value={`${copying} / ${cl.length}`} loading={clients.isLoading} icon={<Users />} />
         <StatCard

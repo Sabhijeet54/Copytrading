@@ -210,12 +210,12 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
   const sidebar = (mini: boolean) => (
     <nav className="flex h-full flex-col gap-5 px-3 py-5">
       <Link href={user.role === 'ADMIN' ? '/admin' : '/dashboard'} className={cn('flex items-center gap-2 px-2', mini && 'justify-center px-0')}>
-        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground">
+        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground">
           <ClipboardList className="size-4" />
         </span>
         {!mini ? (
           <span className="flex flex-col leading-tight">
-            <span className="text-sm font-semibold tracking-tight text-white">CopyTrade</span>
+            <span className="text-base font-semibold tracking-tight text-foreground">CopyTrade</span>
             <span className="text-[10px] font-medium uppercase tracking-wider text-sidebar-muted">{workspaceLabel}</span>
           </span>
         ) : null}
@@ -223,7 +223,7 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
 
       {/* Live status */}
       {status.broker || status.feed ? (
-        <div className={cn('flex flex-col gap-1.5 rounded-lg bg-sidebar-accent/60 p-2.5 text-xs text-sidebar-foreground', mini && 'items-center p-2')}>
+        <div className={cn('flex flex-col gap-1.5 rounded-xl bg-muted p-2.5 text-xs text-sidebar-foreground', mini && 'items-center p-2')}>
           {status.broker ? (
             <span className="flex items-center gap-2" title={`Broker ${status.broker}`}>
               <Dot tone={status.broker === 'connected' ? 'ok' : status.broker === 'expired' ? 'warn' : 'bad'} />
@@ -253,8 +253,8 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
                   title={mini ? item.label : undefined}
                   aria-current={active ? 'page' : undefined}
                   className={cn(
-                    'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-white focus-visible:outline-2 focus-visible:outline-primary',
-                    active && 'bg-sidebar-accent font-medium text-white',
+                    'flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-active focus-visible:outline-2 focus-visible:outline-primary',
+                    active && 'bg-sidebar-accent font-bold text-foreground',
                     mini && 'justify-center px-0',
                   )}
                 >
@@ -267,10 +267,10 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
         ))}
       </div>
 
-      <div className={cn('rounded-lg bg-sidebar-accent/60 p-3', mini && 'p-2')}>
+      <div className={cn('rounded-2xl bg-accent p-3', mini && 'p-2')}>
         {!mini ? (
           <>
-            <p className="truncate text-sm font-medium text-white">{user.name}</p>
+            <p className="truncate text-sm font-semibold text-foreground">{user.name}</p>
             <p className="truncate text-xs text-sidebar-muted">{user.email}</p>
             <p className="mt-1 text-[11px] uppercase tracking-wider text-sidebar-muted">{humanize(user.role)}</p>
           </>
@@ -279,7 +279,7 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
           variant="ghost"
           size="sm"
           title="Sign out"
-          className={cn('mt-2 h-7 w-full justify-start px-2 text-sidebar-foreground hover:bg-sidebar hover:text-white', mini && 'mt-0 justify-center px-0')}
+          className={cn('mt-2 h-7 w-full justify-start px-2 text-sidebar-foreground hover:bg-white hover:text-sidebar-active', mini && 'mt-0 justify-center px-0')}
           disabled={logout.isPending}
           onClick={() => logout.mutate(undefined, { onSettled: () => router.replace('/login') })}
         >
@@ -290,8 +290,14 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
   );
 
   return (
-    <div className={cn('min-h-dvh lg:grid', collapsed ? 'lg:grid-cols-[4.5rem_1fr]' : 'lg:grid-cols-[15rem_1fr]')}>
-      <aside className="sticky top-0 hidden h-dvh bg-sidebar lg:block">{sidebar(collapsed)}</aside>
+    <div className="min-h-dvh bg-frame lg:p-4">
+    <div
+      className={cn(
+        'min-h-dvh bg-background lg:grid lg:min-h-[calc(100dvh-2rem)] lg:rounded-[1.75rem] lg:shadow-[0_20px_60px_-30px_rgba(100,37,254,0.35)]',
+        collapsed ? 'lg:grid-cols-[4.5rem_1fr]' : 'lg:grid-cols-[15.5rem_1fr]',
+      )}
+    >
+      <aside className="sticky top-4 hidden h-[calc(100dvh-2rem)] rounded-l-[1.75rem] border-r bg-sidebar lg:block">{sidebar(collapsed)}</aside>
 
       {mobileOpen ? (
         <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true" aria-label="Menu">
@@ -306,7 +312,7 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
       ) : null}
 
       <div className="min-w-0">
-        <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b bg-background/85 px-4 backdrop-blur sm:px-6">
+        <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b bg-card/90 px-4 backdrop-blur sm:px-6 lg:rounded-tr-[1.75rem]">
           <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Open menu">
             <Menu />
           </Button>
@@ -334,6 +340,7 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
         </header>
         <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</main>
       </div>
+    </div>
     </div>
   );
 }

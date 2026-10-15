@@ -78,7 +78,7 @@ export function ClientDetail({ userId }: { userId: string }) {
     <>
       <PageHeader title={p.name} description={`${p.email}${p.mobile ? ` · ${p.mobile}` : ''} · client since ${formatDateTime(p.createdAt)}`} />
       <div className="grid gap-4">
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="fox-tiles grid grid-cols-2 gap-3 lg:grid-cols-4">
           <StatCard label="Today's P&L" value={<Pnl value={d.todayPnl} />} hint="Your strategies only" />
           <StatCard
             label="Broker"

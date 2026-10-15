@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { cn } from '@/lib/utils';
 
 /** Validated categorical palette (distinct in light and dark). */
-const COLORS = ['#5B6BC0', '#F06EAA', '#22B573', '#2DB7E8', '#F5B83D', '#8E8E99', '#E8663D', '#9B6BD6'];
+const COLORS = ['#6425FE', '#2BC9A0', '#F5B83D', '#4F8EF7', '#E8663D', '#8E8E99', '#9B6BD6', '#22B573'];
 
 function Badge({ tone, children }: { tone: 'ok' | 'off' | 'warn'; children: React.ReactNode }) {
   return (
@@ -177,7 +177,7 @@ export function ClientDashboard() {
 
   return (
     <div className="mb-6 grid gap-4">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="fox-tiles grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Today&apos;s P&amp;L</CardTitle>
