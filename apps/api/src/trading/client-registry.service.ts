@@ -366,6 +366,18 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
         select: { strategyId: true, exchange: true, symbol: true, productType: true, side: true, quantity: true, filledQuantity: true, status: true },
       }),
     ]);
+    // Exits / resizes done outside the copy engine (manual exit, square-off, lot-multiplier change) — replayed in
+    // time order with the copy orders so the net positions match what the client really holds.
+    const manual = await this.prisma.auditLog.findMany({
+      where: { createdAt: { gte: since }, OR: [{ action: 'COPY_STOPPED', targetType: 'BrokerAccount' }, { action: 'PROFILE_UPDATED', targetType: 'StrategyFollower' }] },
+      select: { targetId: true, targetType: true, metadata: true, createdAt: true },
+    });
+    const followersByAccount = new Map<string, string[]>();
+    for (const f of await this.prisma.strategyFollower.findMany({ where: { brokerAccountId: { not: null } }, select: { id: true, brokerAccountId: true } })) {
+      followersByAccount.set(f.brokerAccountId!, [...(followersByAccount.get(f.brokerAccountId!) ?? []), f.id]);
+    }
+    type M = { manualExit?: boolean; manualAdjust?: boolean; exchange?: string; symbol?: string; productType?: ProductType; side?: string; quantity?: number };
+    const events: { at: number; run: () => void }[] = [];
     this.netPos.clear();
     this.masterNet.clear();
     this.days.clear();
@@ -375,8 +387,19 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
       const pendingNormal = !o.mirrored && (o.status === 'SUBMITTED' || o.status === 'OPEN' || o.status === 'PARTIALLY_FILLED');
       const q = pendingNormal ? o.quantity : o.filledQuantity;
       if (!q) continue;
-      this.applyClientFill(o.strategyFollowerId, o.exchange, o.symbol, o.productType, o.side === 'BUY' ? q : -q);
+      events.push({ at: o.createdAt.getTime(), run: () => this.applyClientFill(o.strategyFollowerId, o.exchange, o.symbol, o.productType, o.side === 'BUY' ? q : -q) });
     }
+    for (const a of manual) {
+      const m = a.metadata as M | null;
+      if (!m?.exchange || !m.symbol || !m.productType || !a.targetId) continue;
+      if (m.manualExit && a.targetType === 'BrokerAccount') {
+        events.push({ at: a.createdAt.getTime(), run: () => this.clearPosition(followersByAccount.get(a.targetId!) ?? [], m.exchange!, m.symbol!, m.productType!) });
+      } else if (m.manualAdjust && a.targetType === 'StrategyFollower' && m.quantity) {
+        const signed = m.side === 'SELL' ? -m.quantity : m.quantity;
+        events.push({ at: a.createdAt.getTime(), run: () => this.applyClientFill(a.targetId!, m.exchange!, m.symbol!, m.productType!, signed) });
+      }
+    }
+    events.sort((x, y) => x.at - y.at).forEach((e) => e.run());
     for (const m of masters) {
       // Platform-placed master orders not yet confirmed count in full; everything else counts what filled.
       const q = m.status === 'SUBMITTED' ? m.quantity : m.filledQuantity;

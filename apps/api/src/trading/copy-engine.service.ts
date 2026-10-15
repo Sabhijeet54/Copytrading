@@ -557,7 +557,7 @@ export class CopyEngineService {
         const closed = Math.min(Math.abs(q0), qty);
         realized += closed * (price - a0) * Math.sign(q0);
         if (Math.sign(q1) !== Math.sign(q0) && q1 !== 0) avg = price;
-        if (q1 === 0) avg = 0;
+        if (q1 === 0) avg = a0; // keep the entry average on a closed row (shown in history)
       }
       await tx.position.update({
         where: { id: cur.id },

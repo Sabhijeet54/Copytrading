@@ -116,6 +116,8 @@ export class ExitPositionDto {
 
 export class FollowDto {
   @IsString() brokerAccountId!: string;
+  /** Resize trades already booked (still open) to the new allocation. Default true. */
+  @IsOptional() @IsBoolean() applyToOpenTrades?: boolean;
   @IsEnum({ FIXED_QUANTITY: 'FIXED_QUANTITY', CAPITAL_PERCENTAGE: 'CAPITAL_PERCENTAGE', PROPORTIONAL: 'PROPORTIONAL' })
   allocationMode!: 'FIXED_QUANTITY' | 'CAPITAL_PERCENTAGE' | 'PROPORTIONAL';
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) allocationAmount?: number;

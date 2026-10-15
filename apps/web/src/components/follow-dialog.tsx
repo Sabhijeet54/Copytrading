@@ -24,6 +24,7 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
   const follow = useFollow();
   const [brokerAccountId, setBrokerAccountId] = useState('');
   const [mult, setMult] = useState('1');
+  const [applyOpen, setApplyOpen] = useState(true);
   useEffect(() => {
     if (!s) return;
     const sub = s.subscription;
@@ -41,6 +42,7 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
     const sub = s.subscription;
     const body: FollowInput = {
       brokerAccountId,
+      applyToOpenTrades: applyOpen,
       allocationMode: 'CAPITAL_PERCENTAGE',
       allocationPercent: Math.round(m * 10000) / 100,
       // keep the limits the admin set
@@ -51,7 +53,19 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
       maxTradesPerDay: num(sub?.maxTradesPerDay),
       allowedSegments: (sub?.allowedSegments ?? []) as ('EQ' | 'FO')[],
     };
-    follow.mutate({ strategyId: s.id, body }, { onSuccess: () => (toast.success(`Saved — ${m}× lots`), onClose()), onError: (err) => toast.error(err.message) });
+    follow.mutate(
+      { strategyId: s.id, body },
+      {
+        onSuccess: (r) => {
+          const done = (r.resized ?? []).filter((x) => x.ok);
+          const bad = (r.resized ?? []).filter((x) => !x.ok);
+          toast.success(`Saved — ${m}× lots${done.length ? ` · open trades resized: ${done.map((x) => `${x.symbol} ${x.from}→${x.to}`).join(', ')}` : ''}`);
+          for (const b of bad) toast.error(`${b.symbol}: could not resize (${b.error ?? 'error'})`);
+          onClose();
+        },
+        onError: (err) => toast.error(err.message),
+      },
+    );
   };
 
   return (
@@ -104,6 +118,13 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
                 )}
               </p>
             </div>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" className="mt-0.5 size-4" checked={applyOpen} onChange={(e) => setApplyOpen(e.target.checked)} />
+              <span>
+                Apply to open trades too
+                <span className="block text-xs text-muted-foreground">Trades already booked are resized right away at market (e.g. 1× → 2× buys one more lot).</span>
+              </span>
+            </label>
             <DialogFooter>
               <Button type="submit" disabled={follow.isPending || !brokerAccountId || !valid}>
                 {follow.isPending ? 'Saving…' : 'Save'}

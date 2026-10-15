@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import { LivePositionsCard, PaperPositionsCard, Pnl } from '@/components/live-account';
 import { PageHeader } from '@/components/page-header';
+import { TradeBookCard } from '@/components/trade-book';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -71,6 +72,7 @@ export default function PositionsPage() {
           </CardContent>
         </Card>
 
+        <TradeBookCard />
         {portfolio.isLoading ? <p className="text-sm text-muted-foreground">Loading live data…</p> : null}
         {p && p.paperPositions.length > 0 ? <PaperPositionsCard rows={p.paperPositions} inlineClosed /> : null}
         {p?.live.map((a) => <LivePositionsCard key={a.accountId} a={a} />)}

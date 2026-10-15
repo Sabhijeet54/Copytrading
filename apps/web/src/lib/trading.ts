@@ -89,6 +89,8 @@ export interface MasterOrderInput {
 }
 export interface FollowInput {
   brokerAccountId: string;
+  /** Resize trades already booked (still open) to the new lot multiplier (default true). */
+  applyToOpenTrades?: boolean;
   allocationMode: 'FIXED_QUANTITY' | 'CAPITAL_PERCENTAGE' | 'PROPORTIONAL';
   allocationAmount?: number;
   allocationPercent?: number;
@@ -260,8 +262,15 @@ export function useSetTradingMode() {
 export function useFollow() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ strategyId, body }: { strategyId: string; body: FollowInput }) => api<StrategyFollowerView>(`/follow/strategies/${strategyId}`, { method: 'POST', body }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['follow'] }),
+    mutationFn: ({ strategyId, body }: { strategyId: string; body: FollowInput }) =>
+      api<StrategyFollowerView & { resized?: { symbol: string; from: number; to: number; side: 'BUY' | 'SELL'; quantity: number; ok: boolean; error?: string }[] }>(
+        `/follow/strategies/${strategyId}`,
+        { method: 'POST', body },
+      ),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['follow'] });
+      void qc.invalidateQueries({ queryKey: ['client-dashboard'] });
+    },
   });
 }
 export function useToggleCopy() {
@@ -525,3 +534,26 @@ export const useFnoChain = (exchange: FnoExchange | null, name: string, kind: 'O
     enabled: !!exchange && name.trim().length > 0,
     staleTime: 10 * 60_000,
   });
+
+// ------------------------------------------------------------ client trade book
+
+export interface TradeBookRow {
+  id: string;
+  strategyName: string;
+  exchange: string;
+  symbol: string;
+  productType: string;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  lots: number | null;
+  openQuantity: number;
+  entryPrice: number;
+  entryAt: string;
+  exitPrice: number | null;
+  exitAt: string | null;
+  ltp: number | null;
+  status: 'OPEN' | 'CLOSED';
+  pnl: number;
+}
+export const useTradeBook = () =>
+  useQuery({ queryKey: ['follow', 'trades'], queryFn: () => api<{ totalPnl: number; rows: TradeBookRow[] }>('/follow/trades'), refetchInterval: 5_000 });

@@ -9,6 +9,7 @@ import { toCopyOrderView, toStrategyFollowerView, toStrategyView } from '../comm
 import { PRISMA } from '../common/prisma/prisma.service';
 import { FollowDto, TradingModeDto } from './trading.dto';
 import { allocationLabel, ClientSummaryService, isRemoved } from './client-summary.service';
+import { PositionResizeService } from './position-resize.service';
 import { MarketFeedService } from '../market-data/market-feed.service';
 import { PriceCacheService } from '../market-data/price-cache.service';
 import { startOfTradingDayIST } from '../admin/admin.service';
@@ -30,6 +31,7 @@ export class FollowerController {
     private readonly prices: PriceCacheService,
     private readonly feed: MarketFeedService,
     private readonly summary: ClientSummaryService,
+    private readonly resizer: PositionResizeService,
   ) {}
 
   /**
@@ -156,7 +158,9 @@ export class FollowerController {
     });
     await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: user.id, targetType: 'StrategyFollower', targetId: row.id, metadata: { strategyId: id, ...dto }, client: clientInfo(req) });
     this.accountEvents.emit({ type: 'settings', brokerAccountId: account.id, userId: user.id });
-    return toStrategyFollowerView(row);
+    // New lot multiplier also applies to trades already booked (still open) in this strategy.
+    const resized = dto.applyToOpenTrades === false ? [] : await this.resizer.resizeOpen(row.id, user.id).catch(() => []);
+    return { ...toStrategyFollowerView(row), resized };
   }
 
   @HttpCode(HttpStatus.OK)
@@ -202,6 +206,12 @@ export class FollowerController {
   }
 
   // ------------------------------------------------------------- portfolio
+
+  /** Today's trade book: which strategy (algo) each trade came from, entry / exit, lots and P&L. */
+  @Get('trades')
+  tradeBook(@CurrentUser() user: RequestUser) {
+    return this.summary.tradeBook(user.id);
+  }
 
   /**
    * My positions, holdings and orders. Platform history (copied trades, closed paper positions) is shown for
