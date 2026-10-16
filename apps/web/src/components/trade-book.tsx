@@ -62,7 +62,10 @@ export function TradeBookCard() {
                   <TableCell>
                     <span className={cn('rounded px-1.5 py-0.5 text-xs font-semibold text-white', r.side === 'BUY' ? 'bg-emerald-600' : 'bg-red-600')}>{r.side === 'BUY' ? 'Buy' : 'Sell'}</span>
                   </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs">{fmtTime(r.entryAt)}</TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {fmtTime(r.entryAt)}
+                    {r.carried ? <div className="text-[10px] font-semibold text-warning">carried from earlier day</div> : null}
+                  </TableCell>
                   <TableCell className="text-right tabular-nums">{formatINR(r.entryPrice)}</TableCell>
                   <TableCell className="whitespace-nowrap text-xs">{r.exitAt ? fmtTime(r.exitAt) : '—'}</TableCell>
                   <TableCell className="text-right tabular-nums">
