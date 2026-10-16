@@ -107,7 +107,7 @@ export interface FollowInput {
 const LIVE_MS = 10_000;
 
 // ---------------------------------------------------------------- master
-export const useMasterStrategies = () => useQuery({ queryKey: ['master', 'strategies'], queryFn: () => api<StrategyView[]>('/master/strategies') });
+export const useMasterStrategies = (enabled = true) => useQuery({ queryKey: ['master', 'strategies'], queryFn: () => api<StrategyView[]>('/master/strategies'), enabled });
 export const useMasterLive = () =>
   useQuery({
     queryKey: ['master', 'live'],
@@ -381,11 +381,11 @@ export function useSetSignalTpSl(scope: 'master' | 'admin' = 'master') {
 
 export type AdminSignalRow = SignalRow & { masterName: string | null };
 
-export const useAdminSignals = (p: { from: string; to: string; strategyIds: string[]; status: 'all' | 'open' | 'closed' }) =>
+export const useAdminSignals = (p: { from: string; to: string; strategyIds: string[]; status: 'all' | 'open' | 'closed' }, scope: 'admin' | 'master' = 'admin') =>
   useQuery({
-    queryKey: ['admin-signals', p],
+    queryKey: ['admin-signals', scope, p],
     queryFn: () =>
-      api<AdminSignalRow[]>('/admin/signals', { query: { from: p.from, to: p.to, status: p.status, strategyIds: p.strategyIds.join(',') || undefined } }),
+      api<AdminSignalRow[]>(`/${scope}/signals`, { query: { from: p.from, to: p.to, status: p.status, strategyIds: p.strategyIds.join(',') || undefined } }),
     refetchInterval: 5_000,
   });
 
@@ -476,16 +476,16 @@ export function useAdminUserStrategyMutations(userId: string) {
 
 // ------------------------------------------------------------ admin: trade history corrections
 
-export function useAdminSignalMutations() {
+export function useAdminSignalMutations(scope: 'admin' | 'master' = 'admin') {
   const qc = useQueryClient();
   const done = () => void qc.invalidateQueries({ queryKey: ['admin-signals'] });
   return {
     edit: useMutation({
       mutationFn: ({ id, ...body }: { id: string; entryPrice?: number; exitPrice?: number; quantity?: number }) =>
-        api<{ id: string; realizedPnl: number | null }>(`/admin/signals/${id}`, { method: 'PATCH', body }),
+        api<{ id: string; realizedPnl: number | null }>(`/${scope}/signals/${id}`, { method: 'PATCH', body }),
       onSuccess: done,
     }),
-    remove: useMutation({ mutationFn: (id: string) => api(`/admin/signals/${id}`, { method: 'DELETE' }), onSuccess: done }),
+    remove: useMutation({ mutationFn: (id: string) => api(`/${scope}/signals/${id}`, { method: 'DELETE' }), onSuccess: done }),
   };
 }
 
@@ -549,6 +549,8 @@ export interface TradeBookRow {
   openQuantity: number;
   entryPrice: number;
   entryAt: string;
+  /** Entered on an earlier day (carry forward). */
+  carried?: boolean;
   exitPrice: number | null;
   exitAt: string | null;
   ltp: number | null;

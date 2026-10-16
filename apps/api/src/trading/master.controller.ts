@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpCode, HttpStatus, Inject, NotFoundException, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, HttpCode, HttpStatus, Inject, NotFoundException, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import type Redis from 'ioredis';
@@ -17,7 +17,7 @@ import { RiskService } from './risk.service';
 import { AccountEvents } from '../realtime/account-events';
 import { MarketFeedService } from '../market-data/market-feed.service';
 import { instrumentKey, PriceCacheService } from '../market-data/price-cache.service';
-import { AssignClientDto, ClientHistoryQueryDto, ExitPositionDto, MasterOrderDto, SignalBookExitDto, SignalTpSlDto, StrategyDto, StrategyStatusDto } from './trading.dto';
+import { AssignClientDto, ClientHistoryQueryDto, EditSignalDto, ExitPositionDto, MasterOrderDto, SignalBookExitDto, SignalTpSlDto, StrategyDto, StrategyStatusDto } from './trading.dto';
 import { SignalService } from './signal.service';
 import { startOfTradingDayIST } from '../admin/admin.service';
 import { ClientAssignService } from './client-assign.service';
@@ -443,9 +443,32 @@ export class MasterController {
 
   /** Executed signals with entry / exit / TP-SL / P&L. `scope=today` (default) or `all`. */
   @Get('signals')
-  async signalList(@CurrentUser() user: RequestUser, @Query('status') status?: string, @Query('scope') scope?: string) {
+  async signalList(
+    @CurrentUser() user: RequestUser,
+    @Query('status') status?: string,
+    @Query('scope') scope?: string,
+    @Query('from') fromQ?: string,
+    @Query('to') toQ?: string,
+    @Query('strategyIds') ids?: string,
+  ) {
     const st = status === 'open' || status === 'closed' ? status : 'all';
-    return this.signals.list(user.id, { status: st, from: scope === 'all' ? undefined : startOfTradingDayIST() });
+    const day = /^\d{4}-\d{2}-\d{2}/;
+    const from = fromQ && day.test(fromQ) ? new Date(`${fromQ.slice(0, 10)}T00:00:00+05:30`) : scope === 'all' ? undefined : startOfTradingDayIST();
+    const to = toQ && day.test(toQ) ? new Date(`${toQ.slice(0, 10)}T23:59:59.999+05:30`) : undefined;
+    const strategyIds = ids ? ids.split(',').filter(Boolean).slice(0, 50) : undefined;
+    return this.signals.list(user.id, { status: st, from, to, strategyIds });
+  }
+
+  /** Correct entry / exit / quantity of one of MY signals in trade history (copy orders unchanged). */
+  @Patch('signals/:id')
+  editSignal(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: EditSignalDto) {
+    return this.signals.edit(id, dto, user.id, user.id);
+  }
+
+  /** Remove one of MY closed signals from history (soft delete). */
+  @Delete('signals/:id')
+  deleteSignal(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.signals.remove(id, user.id, user.id);
   }
 
   /** Square off ONE signal for the master and every follower (MARKET). */

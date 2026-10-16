@@ -100,9 +100,6 @@ export function MarketFeedPanel({ showLatency = true }: { showLatency?: boolean 
             <Button size="sm" variant="outline" disabled={action.isPending} onClick={() => action.mutate({ kind: 'restart' }, { onSuccess: () => toast.success('Feed restarted'), onError: err })}>
               <RotateCw /> Restart feed
             </Button>
-            <Button size="sm" variant="ghost" disabled={action.isPending} onClick={() => action.mutate({ kind: 'broker', broker: 'ZERODHA' }, { onError: err })}>
-              Use Zerodha
-            </Button>
             <Button size="sm" variant="ghost" disabled={action.isPending} onClick={() => action.mutate({ kind: 'broker', broker: 'ANGEL_ONE' }, { onError: err })}>
               Use Angel One
             </Button>

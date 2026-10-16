@@ -142,13 +142,14 @@ export class ClientSummaryService {
     const subName = new Map(subs.map((x) => [x.id, x.strategy.name]));
     const [orders, audits] = await Promise.all([
       this.prisma.copyOrder.findMany({
-        where: { followerUserId: userId, createdAt: { gte: since }, filledQuantity: { gt: 0 }, strategyFollowerId: { in: subs.map((x) => x.id) } },
+        // From 10 days back, so a position bought earlier (carry forward) and exited today is matched to its entry.
+        where: { followerUserId: userId, createdAt: { gte: new Date(since.getTime() - 10 * 86_400_000) }, filledQuantity: { gt: 0 }, strategyFollowerId: { in: subs.map((x) => x.id) } },
         include: { masterTrade: { select: { rawPayload: true } } },
         orderBy: { createdAt: 'asc' },
       }),
       this.prisma.auditLog.findMany({
         where: {
-          createdAt: { gte: since },
+          createdAt: { gte: new Date(since.getTime() - 10 * 86_400_000) },
           OR: [
             { action: 'PROFILE_UPDATED', targetType: 'StrategyFollower', targetId: { in: subs.map((x) => x.id) } },
             { action: 'COPY_STOPPED', targetType: 'BrokerAccount', targetId: { in: [...new Set(subs.map((x) => x.brokerAccountId).filter(Boolean) as string[])] } },
@@ -245,7 +246,10 @@ export class ClientSummaryService {
         }
       }
     }
-    const out = rows.map((r) => {
+    // Today's book: trades entered today, plus earlier trades that were exited today or are still open.
+    const sinceIso = since.toISOString();
+    const visible = rows.filter((r) => r.entryAt >= sinceIso || r.closedQty < r.quantity || (r.exitAt != null && r.exitAt >= sinceIso));
+    const out = visible.map((r) => {
       const dir = r.side === 'BUY' ? 1 : -1;
       const openQty = r.quantity - r.closedQty;
       const exitPrice = r.closedQty ? r.exitValue / r.closedQty : null;
@@ -264,6 +268,7 @@ export class ClientSummaryService {
         openQuantity: openQty,
         entryPrice: Math.round(r.entryPrice * 100) / 100,
         entryAt: r.entryAt,
+        carried: r.entryAt < sinceIso,
         exitPrice: exitPrice == null ? null : Math.round(exitPrice * 100) / 100,
         exitAt: openQty ? null : r.exitAt,
         ltp,

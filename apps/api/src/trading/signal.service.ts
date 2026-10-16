@@ -119,8 +119,8 @@ export class SignalService implements OnApplicationBootstrap, OnModuleDestroy {
    * Admin correction of one signal in trade history: entry / exit price and quantity. Realized P&L of the
    * exited quantity is recomputed. Client copy orders are NOT changed (they are the real broker fills).
    */
-  async edit(id: string, dto: { entryPrice?: number; exitPrice?: number; quantity?: number }, actorUserId: string) {
-    const sig = await this.getOwned(null, id);
+  async edit(id: string, dto: { entryPrice?: number; exitPrice?: number; quantity?: number }, actorUserId: string, masterUserId: string | null = null) {
+    const sig = await this.getOwned(masterUserId, id);
     const entry = dto.entryPrice ?? D(sig.averagePrice) ?? D(sig.price);
     const size = dto.quantity ?? (sig.filledQuantity > 0 ? sig.filledQuantity : sig.quantity);
     const closedQty = Math.min(sig.closedQuantity, size);
@@ -150,8 +150,8 @@ export class SignalService implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   /** Removes one signal from trade history / performance (soft delete). Open signals must be squared off first. */
-  async remove(id: string, actorUserId: string) {
-    const sig = await this.getOwned(null, id);
+  async remove(id: string, actorUserId: string, masterUserId: string | null = null) {
+    const sig = await this.getOwned(masterUserId, id);
     if (sig.signalStatus === 'OPEN') throw new BadRequestException('Square off this signal before deleting it.');
     await this.prisma.masterTrade.update({ where: { id }, data: { signalStatus: DELETED } });
     await this.audit.log({ action: 'STRATEGY_UPDATED', actorUserId, targetType: 'MasterTrade', targetId: id, metadata: { signalDeleted: true, symbol: sig.symbol } });

@@ -26,14 +26,21 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
   const toggle = useToggleCopy();
   const [brokerAccountId, setBrokerAccountId] = useState('');
   const [mult, setMult] = useState('1');
-  const [applyOpen, setApplyOpen] = useState(true);
+  // Fill the form ONCE when the dialog opens (not on every background refetch — that used to reset the
+  // multiplier the client had just picked back to the old value before Save).
   useEffect(() => {
     if (!s) return;
     const sub = s.subscription;
-    const firstConnected = accounts.data?.find((a) => a.status === 'CONNECTED' && a.broker !== 'MOCK') ?? accounts.data?.[0];
-    setBrokerAccountId(sub?.brokerAccountId ?? firstConnected?.id ?? '');
     setMult(sub?.allocationMode === 'CAPITAL_PERCENTAGE' && sub.allocationPercent ? String(+(Number(sub.allocationPercent) / 100).toFixed(2)) : sub?.fixedLots ? String(sub.fixedLots) : '1');
-  }, [s, accounts.data]);
+    setBrokerAccountId(sub?.brokerAccountId ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s?.id]);
+  // Pick a broker account when none is set yet (accounts may load after the dialog opens).
+  useEffect(() => {
+    if (!s || brokerAccountId) return;
+    const firstConnected = accounts.data?.find((a) => a.status === 'CONNECTED' && a.broker !== 'MOCK' && a.mode !== 'DATA_ONLY') ?? accounts.data?.[0];
+    if (firstConnected) setBrokerAccountId(firstConnected.id);
+  }, [s, accounts.data, brokerAccountId]);
 
   const m = Number(mult);
   const valid = m > 0 && m <= 10;
@@ -44,7 +51,7 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
     const sub = s.subscription;
     const body: FollowInput = {
       brokerAccountId,
-      applyToOpenTrades: applyOpen,
+      applyToOpenTrades: false,
       allocationMode: 'CAPITAL_PERCENTAGE',
       allocationPercent: Math.round(m * 10000) / 100,
       // keep the limits the admin set
@@ -68,7 +75,7 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
               { onError: (e) => toast.warning(`Connected, copying not started: ${e.message}. Press Start in My strategies.`) },
             );
           toastResized(r.resized);
-          if (applyOpen && !(r.resized ?? []).length) toast.info('No open trade in this strategy — the new size applies from the next trade.');
+          if (!isNew) toast.info('Trade book & P&L now shown at the new lot size (website only).');
           onClose();
         },
         onError: (err) => toast.error(err.message),
@@ -126,13 +133,10 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
                 )}
               </p>
             </div>
-            <label className="flex items-start gap-2 text-sm">
-              <input type="checkbox" className="mt-0.5 size-4" checked={applyOpen} onChange={(e) => setApplyOpen(e.target.checked)} />
-              <span>
-                Apply to open trades too
-                <span className="block text-xs text-muted-foreground">Trades already booked are resized right away at market (e.g. 1× → 2× buys one more lot).</span>
-              </span>
-            </label>
+            <p className="rounded-md border border-primary/20 bg-accent px-3 py-2 text-xs text-accent-foreground">
+              Today&apos;s trades (open and closed) are re-shown at the new lot size on this website (Trade book, P&amp;L). No extra order is sent to
+              your broker / demat for them.
+            </p>
             <DialogFooter>
               <Button type="submit" disabled={follow.isPending || !brokerAccountId || !valid}>
                 {follow.isPending ? 'Saving…' : s?.subscription ? 'Save' : 'Connect'}

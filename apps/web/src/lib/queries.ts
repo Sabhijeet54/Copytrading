@@ -141,8 +141,9 @@ export function useDisconnectBroker() {
 
 type Query = Record<string, string | number | undefined>;
 
-function useAdminList<T>(resource: string, path: string, params: Query) {
+function useAdminList<T>(resource: string, path: string, params: Query, enabled = true) {
   return useQuery({
+    enabled,
     queryKey: qk.admin(resource, params),
     queryFn: () => api<Paginated<T>>(path, { query: params }),
     placeholderData: (prev) => prev,
@@ -157,7 +158,7 @@ export const useAdminUser = (id: string) =>
   useQuery({ queryKey: qk.admin('user', { id }), queryFn: () => api<AdminUserDetail>(`/admin/users/${id}`) });
 export const useAdminBrokerAccounts = (p: Query) =>
   useAdminList<BrokerAccountView & { userName: string; userEmail: string }>('broker-accounts', '/admin/broker-accounts', p);
-export const useAdminStrategies = (p: Query) => useAdminList<StrategyView>('strategies', '/admin/strategies', p);
+export const useAdminStrategies = (p: Query, opts?: { enabled?: boolean }) => useAdminList<StrategyView>('strategies', '/admin/strategies', p, opts?.enabled ?? true);
 export const useAdminStrategyFollowers = (id: string | null) =>
   useQuery({
     queryKey: qk.admin('strategy-followers', { id }),

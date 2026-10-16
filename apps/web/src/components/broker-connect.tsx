@@ -92,7 +92,9 @@ export function BrokerConnectButtons({ angelClientCode, isMaster = false }: { an
   const start = useStartBrokerLogin();
   const [angelOpen, setAngelOpen] = useState(false);
   if (!available.data) return null;
-  const { zerodha, angelOne, angelOnePublisherLogin } = available.data;
+  const { angelOne, angelOnePublisherLogin } = available.data;
+  // Master uses Angel One only (Zerodha removed for the master).
+  const zerodha = available.data.zerodha && !isMaster;
   if (!zerodha && !angelOne) {
     return <p className="text-sm text-muted-foreground">No broker is configured on the server yet.</p>;
   }
