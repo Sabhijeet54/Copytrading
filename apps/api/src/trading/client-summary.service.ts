@@ -156,6 +156,11 @@ export class ClientSummaryService {
       }
       return Math.round(pnl * 100) / 100;
     };
+    // Same numbers as the trade book (current lot size, manual exits closed at the full shown quantity).
+    const tb = await this.tradeBook(userId);
+    const tbPnl = new Map<string, number>();
+    for (const r of tb.rows) tbPnl.set(r.followerId, (tbPnl.get(r.followerId) ?? 0) + r.pnl);
+    void pnlOf;
     const strategies = subs.map((s) => ({
       followerId: s.id,
       strategyId: s.strategyId,
@@ -163,7 +168,7 @@ export class ClientSummaryService {
       strategyStatus: s.strategy.status,
       copyStatus: s.copyStatus,
       allocation: allocationLabel(s),
-      todayPnl: pnlOf(s.id),
+      todayPnl: Math.round((tbPnl.get(s.id) ?? 0) * 100) / 100,
       todayTrades: trades.get(s.id) ?? 0,
     }));
     return { todayPnl: Math.round(strategies.reduce((a, x) => a + x.todayPnl, 0) * 100) / 100, strategies };
@@ -298,6 +303,7 @@ export class ClientSummaryService {
       const pnl = (exitPrice != null ? (exitPrice - r.entryPrice) * r.closedQty * dir : 0) + (ltp != null ? (ltp - r.entryPrice) * openQty * dir : 0);
       return {
         id: r.id,
+        followerId: r.followerId,
         strategyName: r.strategyName,
         exchange: r.exchange,
         symbol: r.symbol,
