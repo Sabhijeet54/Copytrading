@@ -8,6 +8,34 @@ import { allocationLabel, isRemoved } from './follower-access';
 
 export { allocationLabel, isRemoved, REMOVED_REASON } from './follower-access';
 
+/** Trades are shown at the client's current lot multiplier (see displayQty). */
+const DISPLAY_SCALED = true;
+
+type SubLike = {
+  allocationMode: string;
+  allocationPercent: unknown;
+  fixedQuantity: number | null;
+  fixedLots: number | null;
+};
+type MasterLike = { quantity: number; filledQuantity: number; rawPayload: unknown } | null | undefined;
+
+/**
+ * DISPLAY quantity of a copied order at the client's CURRENT lot multiplier (website only).
+ * Changing the multiplier re-states today's trades (open and closed) on the website; nothing is sent to the
+ * broker and the real copied quantity is unchanged. Falls back to the real filled quantity.
+ */
+export function displayQty(sub: SubLike | undefined, master: MasterLike, realQty: number): number {
+  if (!sub || !master) return realQty;
+  const masterQty = master.filledQuantity > 0 ? master.filledQuantity : master.quantity;
+  const lot = Math.max(1, Number((master.rawPayload as { lotSize?: number } | null)?.lotSize) || 1);
+  let q: number;
+  if (sub.allocationMode === 'CAPITAL_PERCENTAGE') q = Math.floor((masterQty * (Number(sub.allocationPercent) || 0)) / 100);
+  else if (sub.allocationMode === 'FIXED_QUANTITY') q = sub.fixedLots ? sub.fixedLots * lot : (sub.fixedQuantity ?? realQty);
+  else return realQty;
+  q = Math.floor(q / lot) * lot;
+  return q > 0 ? q : realQty;
+}
+
 export interface StrategyDaySummary {
   followerId: string;
   strategyId: string;
@@ -43,8 +71,17 @@ export class ClientSummaryService {
     const subs = subsAll.filter((s) => !isRemoved(s));
     const orders = await this.prisma.copyOrder.findMany({
       where: { followerUserId: userId, createdAt: { gte: since }, filledQuantity: { gt: 0 }, strategyFollowerId: { in: subsAll.map((s) => s.id) } },
-      select: { strategyFollowerId: true, exchange: true, symbol: true, side: true, filledQuantity: true, averagePrice: true },
+      select: {
+        strategyFollowerId: true,
+        exchange: true,
+        symbol: true,
+        side: true,
+        filledQuantity: true,
+        averagePrice: true,
+        masterTrade: { select: { quantity: true, filledQuantity: true, rawPayload: true } },
+      },
     });
+    const subById = new Map(subsAll.map((x) => [x.id, x]));
     // Per subscription & instrument: cash flow and net quantity.
     const book = new Map<string, Map<string, { cash: number; net: number; last: number }>>();
     const trades = new Map<string, number>();
@@ -54,8 +91,9 @@ export class ClientSummaryService {
       const inst = `${o.exchange}:${o.symbol}`;
       const m = book.get(o.strategyFollowerId) ?? new Map();
       const cur = m.get(inst) ?? { cash: 0, net: 0, last: px };
-      cur.cash -= sign * o.filledQuantity * px;
-      cur.net += sign * o.filledQuantity;
+      const q = displayQty(subById.get(o.strategyFollowerId), o.masterTrade, o.filledQuantity);
+      cur.cash -= sign * q * px;
+      cur.net += sign * q;
       cur.last = px || cur.last;
       m.set(inst, cur);
       book.set(o.strategyFollowerId, m);
@@ -68,7 +106,8 @@ export class ClientSummaryService {
     });
     for (const a of adjusts) {
       const m = a.metadata as { manualAdjust?: boolean; exchange?: string; symbol?: string; side?: string; quantity?: number; price?: number | null } | null;
-      if (!m?.manualAdjust || !m.exchange || !m.symbol || !m.quantity || !a.targetId) continue;
+      // Display uses the CURRENT multiplier for every trade (displayQty), so real resize orders are not added again.
+      if (DISPLAY_SCALED || !m?.manualAdjust || !m.exchange || !m.symbol || !m.quantity || !a.targetId) continue;
       const inst = `${m.exchange}:${m.symbol}`;
       const sign = m.side === 'SELL' ? -1 : 1;
       const fm = book.get(a.targetId) ?? new Map<string, { cash: number; net: number; last: number }>();
@@ -144,7 +183,7 @@ export class ClientSummaryService {
       this.prisma.copyOrder.findMany({
         // From 10 days back, so a position bought earlier (carry forward) and exited today is matched to its entry.
         where: { followerUserId: userId, createdAt: { gte: new Date(since.getTime() - 10 * 86_400_000) }, filledQuantity: { gt: 0 }, strategyFollowerId: { in: subs.map((x) => x.id) } },
-        include: { masterTrade: { select: { rawPayload: true } } },
+        include: { masterTrade: { select: { rawPayload: true, quantity: true, filledQuantity: true } } },
         orderBy: { createdAt: 'asc' },
       }),
       this.prisma.auditLog.findMany({
@@ -177,6 +216,7 @@ export class ClientSummaryService {
     };
     type Ev = { at: number; kind: 'entry' | 'exit' | 'adjust' | 'manualExit'; key: string; followerId?: string; accountId?: string; side: 'BUY' | 'SELL'; qty: number; price: number; id: string; lot: number; ex: string; sym: string; product: string };
     const evs: Ev[] = [];
+    const subById2 = new Map(subs.map((x) => [x.id, x]));
     for (const o of orders) {
       const lot = (o.masterTrade.rawPayload as { lotSize?: number } | null)?.lotSize ?? 1;
       evs.push({
@@ -185,7 +225,7 @@ export class ClientSummaryService {
         key: `${o.strategyFollowerId}|${o.exchange}:${o.symbol}|${o.productType}`,
         followerId: o.strategyFollowerId,
         side: o.side,
-        qty: o.filledQuantity,
+        qty: displayQty(subById2.get(o.strategyFollowerId), o.masterTrade, o.filledQuantity),
         price: o.averagePrice == null ? 0 : Number(o.averagePrice),
         id: o.id,
         lot,
@@ -198,7 +238,7 @@ export class ClientSummaryService {
       const m = a.metadata as { manualExit?: boolean; manualAdjust?: boolean; exchange?: string; symbol?: string; productType?: string; side?: string; quantity?: number; price?: number | null } | null;
       if (!m?.exchange || !m.symbol || !m.productType || !a.targetId) continue;
       const px = m.price ?? this.prices.get(instrumentKey(m.exchange, m.symbol)) ?? 0;
-      if (m.manualAdjust && a.targetType === 'StrategyFollower' && m.quantity) {
+      if (!DISPLAY_SCALED && m.manualAdjust && a.targetType === 'StrategyFollower' && m.quantity) {
         evs.push({ at: a.createdAt.getTime(), kind: 'adjust', key: `${a.targetId}|${m.exchange}:${m.symbol}|${m.productType}`, followerId: a.targetId, side: m.side === 'SELL' ? 'SELL' : 'BUY', qty: m.quantity, price: px, id: '', lot: 1, ex: m.exchange, sym: m.symbol, product: m.productType });
       } else if (m.manualExit && a.targetType === 'BrokerAccount') {
         evs.push({ at: a.createdAt.getTime(), kind: 'manualExit', key: `*|${m.exchange}:${m.symbol}|${m.productType}`, accountId: a.targetId, side: m.side === 'BUY' ? 'BUY' : 'SELL', qty: m.quantity ?? 0, price: px, id: '', lot: 1, ex: m.exchange, sym: m.symbol, product: m.productType });

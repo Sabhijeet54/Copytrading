@@ -201,7 +201,8 @@ export class FollowerController {
     this.accountEvents.emit({ type: 'settings', brokerAccountId: account.id, userId: user.id });
     // New lot multiplier also applies to trades already booked (still open) in this strategy.
     let resized: Awaited<ReturnType<PositionResizeService['resizeOpen']>> = [];
-    if (dto.applyToOpenTrades !== false) {
+    // Test mode: a lot change only RE-STATES trades on the website (trade book / P&L) — no orders are placed.
+    if (dto.applyToOpenTrades === true && process.env.ALLOW_LIVE_RESIZE === 'true') {
       try {
         resized = await this.resizer.resizeOpen(row.id, user.id);
       } catch (err) {

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { LivePositionsCard, PaperPositionsCard, Pnl } from '@/components/live-account';
+import { LivePositionsCard, Pnl } from '@/components/live-account';
 import { PageHeader } from '@/components/page-header';
 import { TradeBookCard } from '@/components/trade-book';
 import { Button } from '@/components/ui/button';
@@ -74,10 +74,6 @@ export default function PositionsPage() {
 
         <TradeBookCard />
         {portfolio.isLoading ? <p className="text-sm text-muted-foreground">Loading live data…</p> : null}
-        {/* Trade book above is the strategy-wise record of today. Below: only what is still OPEN right now. */}
-        {p && p.paperPositions.some((x) => x.quantity !== 0) ? (
-          <PaperPositionsCard rows={p.paperPositions.filter((x) => x.quantity !== 0)} title="Open positions (paper)" />
-        ) : null}
         {/* Broker card only for live trading (in paper mode the broker has no copied positions). */}
         {p?.live.filter((a) => !p.paperMode || (a.positions ?? []).length > 0).map((a) => <LivePositionsCard key={a.accountId} a={a} />)}
         {p && p.live.length === 0 && p.paperPositions.length === 0 ? (

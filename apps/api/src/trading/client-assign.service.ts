@@ -78,7 +78,7 @@ export class ClientAssignService {
     this.accountEvents.emit({ type: 'settings', brokerAccountId: account?.id ?? '', userId: client.id });
     // A changed lot multiplier also applies to trades already booked (still open) in this strategy.
     let resized: ResizeResult[] = [];
-    if (existing) {
+    if (existing && process.env.ALLOW_LIVE_RESIZE === 'true') {
       try {
         resized = await this.resizer.resizeOpen(row.id, actorUserId);
       } catch (err) {
