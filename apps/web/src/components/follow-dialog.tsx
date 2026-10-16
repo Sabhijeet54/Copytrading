@@ -43,11 +43,11 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
   }, [s, accounts.data, brokerAccountId]);
 
   const m = Number(mult);
-  const valid = m > 0 && m <= 10;
+  const valid = m > 0 && m < 10;
 
   const save = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!s || !valid) return void toast.error('Lot multiplier must be between 0.01 and 10');
+    if (!s || !valid) return void toast.error('Lot multiplier must be between 0.01 and 9.99');
     const sub = s.subscription;
     const body: FollowInput = {
       brokerAccountId,
@@ -120,7 +120,7 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
                     {p}×
                   </Button>
                 ))}
-                <Input id="fd-mult" className="w-24" type="number" min={0.01} max={10} step="any" inputMode="decimal" value={mult} onChange={(e) => setMult(e.target.value)} required />
+                <Input id="fd-mult" className="w-24" type="number" min={0.01} max={9.99} step="any" inputMode="decimal" value={mult} onChange={(e) => setMult(e.target.value)} required />
               </div>
               <p className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
                 {valid ? (
@@ -129,7 +129,7 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
                     <strong className="text-foreground">{Math.floor(2 * m)} lots</strong> (rounded down to whole lots).
                   </>
                 ) : (
-                  'Enter a multiplier between 0.01 and 10'
+                  'Enter a multiplier between 0.01 and 9.99'
                 )}
               </p>
             </div>

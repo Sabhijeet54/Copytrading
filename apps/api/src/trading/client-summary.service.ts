@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { PrismaClient } from '@ctp/database';
 import { startOfTradingDayIST } from '../admin/admin.service';
 import { PRISMA } from '../common/prisma/prisma.service';
@@ -54,6 +54,7 @@ export interface StrategyDaySummary {
  */
 @Injectable()
 export class ClientSummaryService {
+  private readonly logger = new Logger('ClientSummary');
   constructor(
     @Inject(PRISMA) private readonly prisma: PrismaClient,
     private readonly prices: PriceCacheService,
@@ -157,10 +158,14 @@ export class ClientSummaryService {
       return Math.round(pnl * 100) / 100;
     };
     // Same numbers as the trade book (current lot size, manual exits closed at the full shown quantity).
-    const tb = await this.tradeBook(userId);
-    const tbPnl = new Map<string, number>();
-    for (const r of tb.rows) tbPnl.set(r.followerId, (tbPnl.get(r.followerId) ?? 0) + r.pnl);
-    void pnlOf;
+    let tbPnl: Map<string, number> | null = new Map<string, number>();
+    try {
+      const tb = await this.tradeBook(userId);
+      for (const r of tb.rows) tbPnl.set(r.followerId, (tbPnl.get(r.followerId) ?? 0) + r.pnl);
+    } catch (err) {
+      this.logger.error(`tradeBook failed for ${userId}: ${(err as Error).stack ?? err}`);
+      tbPnl = null;
+    }
     const strategies = subs.map((s) => ({
       followerId: s.id,
       strategyId: s.strategyId,
@@ -168,7 +173,7 @@ export class ClientSummaryService {
       strategyStatus: s.strategy.status,
       copyStatus: s.copyStatus,
       allocation: allocationLabel(s),
-      todayPnl: Math.round((tbPnl.get(s.id) ?? 0) * 100) / 100,
+      todayPnl: tbPnl ? Math.round((tbPnl.get(s.id) ?? 0) * 100) / 100 : pnlOf(s.id),
       todayTrades: trades.get(s.id) ?? 0,
     }));
     return { todayPnl: Math.round(strategies.reduce((a, x) => a + x.todayPnl, 0) * 100) / 100, strategies };

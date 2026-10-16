@@ -73,7 +73,7 @@ export class AssignStrategyDto {
   @IsOptional() @IsEnum({ FIXED_QUANTITY: 'FIXED_QUANTITY', CAPITAL_PERCENTAGE: 'CAPITAL_PERCENTAGE', PROPORTIONAL: 'PROPORTIONAL' })
   allocationMode?: 'FIXED_QUANTITY' | 'CAPITAL_PERCENTAGE' | 'PROPORTIONAL';
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) allocationAmount?: number;
-  @IsOptional() @Type(() => Number) @IsNumber() @Min(0.01) @Max(1000) allocationPercent?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0.01) @Max(999.99, { message: "Lot multiplier can be at most 9.99×" }) allocationPercent?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) fixedQuantity?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) fixedLots?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) maxLots?: number;
@@ -121,7 +121,7 @@ export class FollowDto {
   @IsEnum({ FIXED_QUANTITY: 'FIXED_QUANTITY', CAPITAL_PERCENTAGE: 'CAPITAL_PERCENTAGE', PROPORTIONAL: 'PROPORTIONAL' })
   allocationMode!: 'FIXED_QUANTITY' | 'CAPITAL_PERCENTAGE' | 'PROPORTIONAL';
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) allocationAmount?: number;
-  @IsOptional() @Type(() => Number) @IsNumber() @Min(0.01) @Max(1000) allocationPercent?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0.01) @Max(999.99, { message: "Lot multiplier can be at most 9.99×" }) allocationPercent?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) fixedQuantity?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) maxQuantity?: number;
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) maxTradeValue?: number;
