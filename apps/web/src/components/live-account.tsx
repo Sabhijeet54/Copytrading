@@ -391,7 +391,7 @@ export function PaperPositionsCard({
         <CardTitle>{title}</CardTitle>
         <CardDescription>
           {inlineClosed
-            ? 'Paper trading — simulated fills, no real orders. Positions closed today stay listed with qty 0 and their realized P&L.'
+            ? 'Paper trading — simulated fills, no real orders.'
             : 'Simulated fills (PAPER_MODE / paper accounts). No real orders were placed. Exited positions move to Closed history.'}
         </CardDescription>
       </CardHeader>

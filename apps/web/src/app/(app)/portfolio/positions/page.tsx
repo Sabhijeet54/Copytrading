@@ -74,8 +74,12 @@ export default function PositionsPage() {
 
         <TradeBookCard />
         {portfolio.isLoading ? <p className="text-sm text-muted-foreground">Loading live data…</p> : null}
-        {p && p.paperPositions.length > 0 ? <PaperPositionsCard rows={p.paperPositions} inlineClosed /> : null}
-        {p?.live.map((a) => <LivePositionsCard key={a.accountId} a={a} />)}
+        {/* Trade book above is the strategy-wise record of today. Below: only what is still OPEN right now. */}
+        {p && p.paperPositions.some((x) => x.quantity !== 0) ? (
+          <PaperPositionsCard rows={p.paperPositions.filter((x) => x.quantity !== 0)} title="Open positions (paper)" />
+        ) : null}
+        {/* Broker card only for live trading (in paper mode the broker has no copied positions). */}
+        {p?.live.filter((a) => !p.paperMode || (a.positions ?? []).length > 0).map((a) => <LivePositionsCard key={a.accountId} a={a} />)}
         {p && p.live.length === 0 && p.paperPositions.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No positions today. Connect your broker on the{' '}
