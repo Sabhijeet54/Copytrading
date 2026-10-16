@@ -22,6 +22,7 @@ import {
   ScrollText,
   Settings,
   ShieldCheck,
+  Store,
   Users,
   Wallet,
   X,
@@ -81,6 +82,7 @@ const MENUS: Record<Role, NavSection[]> = {
       title: 'Workspace',
       items: [
         { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+        { href: '/portfolio/marketplace', label: 'Marketplace', icon: Store },
         { href: '/portfolio', label: 'My strategies', icon: Copy, exact: true },
         { href: '/portfolio/positions', label: 'Positions', icon: Briefcase },
         { href: '/portfolio/holdings', label: 'Holdings', icon: Wallet },

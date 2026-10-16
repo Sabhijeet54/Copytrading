@@ -8,7 +8,7 @@ import { CurrentUser, RequestUser, Roles } from '../common/decorators/auth.decor
 import { toCopyOrderView, toStrategyFollowerView, toStrategyView } from '../common/mappers';
 import { PRISMA } from '../common/prisma/prisma.service';
 import { FollowDto, TradingModeDto } from './trading.dto';
-import { allocationLabel, ClientSummaryService, isRemoved } from './client-summary.service';
+import { allocationLabel, ClientSummaryService, isRemoved, REMOVED_REASON } from './client-summary.service';
 import { PositionResizeService } from './position-resize.service';
 import { MarketFeedService } from '../market-data/market-feed.service';
 import { PriceCacheService } from '../market-data/price-cache.service';
@@ -95,7 +95,43 @@ export class FollowerController {
     return { mode: dto.mode };
   }
 
-  /** Only the strategies an admin / master assigned to me. */
+  /** Marketplace: every live strategy, with my connection (if any). */
+  @Get('marketplace')
+  async marketplace(@CurrentUser() user: RequestUser) {
+    const [rows, mine] = await Promise.all([
+      this.prisma.strategy.findMany({
+        where: { status: { in: ['ACTIVE', 'PAUSED'] } },
+        include: { master: { select: { name: true } }, _count: { select: { followers: true } } },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.strategyFollower.findMany({ where: { followerUserId: user.id } }),
+    ]);
+    const byStrategy = new Map(mine.filter((m) => !isRemoved(m)).map((m) => [m.strategyId, m]));
+    return rows.map((st) => {
+      const sub = byStrategy.get(st.id);
+      return { ...toStrategyView(st), connected: !!sub, subscription: sub ? toStrategyFollowerView(sub) : null, allocationLabel: sub ? allocationLabel(sub) : null };
+    });
+  }
+
+  /**
+   * Disconnect a strategy: copying stops and the strategy with its trades disappears from my screens.
+   * Positions already in my broker account are NOT closed (exit them first if needed).
+   */
+  @HttpCode(HttpStatus.OK)
+  @Post('strategies/:id/disconnect')
+  async disconnect(@CurrentUser() user: RequestUser, @Param('id') id: string, @Req() req: Request) {
+    const sub = await this.prisma.strategyFollower.findUnique({ where: { strategyId_followerUserId: { strategyId: id, followerUserId: user.id } } });
+    if (!sub || isRemoved(sub)) throw new NotFoundException('You are not connected to this strategy');
+    await this.prisma.strategyFollower.update({
+      where: { id: sub.id },
+      data: { copyStatus: 'OFF', stoppedAt: new Date(), stoppedReason: REMOVED_REASON, stoppedByUserId: user.id },
+    });
+    await this.audit.log({ action: 'COPY_STOPPED', actorUserId: user.id, targetType: 'StrategyFollower', targetId: sub.id, metadata: { disconnected: true }, client: clientInfo(req) });
+    this.accountEvents.emit({ type: 'settings', brokerAccountId: sub.brokerAccountId ?? '', userId: user.id });
+    return { disconnected: true };
+  }
+
+  /** My connected strategies (connected by me from the marketplace, or by admin / master). */
   @Get('strategies')
   async strategies(@CurrentUser() user: RequestUser) {
     const mine = (await this.prisma.strategyFollower.findMany({ where: { followerUserId: user.id } })).filter((m) => !isRemoved(m));
@@ -134,8 +170,11 @@ export class FollowerController {
     if (dto.allocationMode === 'CAPITAL_PERCENTAGE' && !dto.allocationPercent) throw new BadRequestException('Allocation % is required');
     if (dto.allocationMode === 'PROPORTIONAL' && !dto.allocationAmount) throw new BadRequestException('Capital amount is required');
     const existing = await this.prisma.strategyFollower.findUnique({ where: { strategyId_followerUserId: { strategyId: id, followerUserId: user.id } } });
-    // A client can only trade strategies that an admin / master assigned to him.
-    if (!existing || isRemoved(existing)) throw new BadRequestException('This strategy is not assigned to you — contact your admin.');
+    // Connecting from the marketplace: a new (or previously disconnected) subscription takes a free seat.
+    if ((!existing || isRemoved(existing)) && s.maxFollowers) {
+      const taken = await this.prisma.strategyFollower.count({ where: { strategyId: id, NOT: { copyStatus: 'OFF', stoppedReason: REMOVED_REASON } } });
+      if (taken >= s.maxFollowers) throw new BadRequestException('This strategy is full');
+    }
     const data = {
       brokerAccountId: account.id,
       allocationMode: dto.allocationMode,
@@ -149,6 +188,8 @@ export class FollowerController {
       maxDailyLoss: dto.maxDailyLoss ?? null,
       maxTradesPerDay: dto.maxTradesPerDay ?? null,
       allowedSegments: dto.allowedSegments ?? [],
+      // Re-connecting a disconnected strategy makes it visible again.
+      ...(existing && isRemoved(existing) ? { stoppedReason: null } : {}),
     };
     const row = await this.prisma.strategyFollower.upsert({
       where: { strategyId_followerUserId: { strategyId: id, followerUserId: user.id } },
@@ -234,7 +275,7 @@ export class FollowerController {
         orderBy: { updatedAt: 'desc' },
       }),
       this.prisma.copyOrder.findMany({
-        where: { followerUserId: user.id, createdAt: { gte: since } },
+        where: { followerUserId: user.id, createdAt: { gte: since }, NOT: { strategyFollower: { copyStatus: 'OFF', stoppedReason: REMOVED_REASON } } },
         include: { strategyFollower: { select: { strategy: { select: { name: true } } } } },
         orderBy: { createdAt: 'desc' },
         take: 500,

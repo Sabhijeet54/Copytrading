@@ -315,7 +315,7 @@ export class MasterController {
     if (!link) throw new ForbiddenException('This client does not follow any of your strategies');
     const [live, paper] = await Promise.all([
       this.trading.liveData(userId),
-      this.prisma.position.findMany({ where: { userId, isPaper: true }, orderBy: { updatedAt: 'desc' } }),
+      this.prisma.position.findMany({ where: { userId, isPaper: true, OR: [{ quantity: { not: 0 } }, { updatedAt: { gte: startOfTradingDayIST() } }] }, orderBy: { updatedAt: 'desc' } }),
     ]);
     return { live: overlayLivePrices(live, this.prices, this.feed), paperPositions: paper.map((p) => paperPositionView(p, this.prices, this.feed)) };
   }
@@ -482,7 +482,7 @@ export class MasterController {
   async live(@CurrentUser() user: RequestUser) {
     const [live, paper, accounts] = await Promise.all([
       this.trading.liveData(user.id),
-      this.prisma.position.findMany({ where: { userId: user.id, isPaper: true }, orderBy: { updatedAt: 'desc' } }),
+      this.prisma.position.findMany({ where: { userId: user.id, isPaper: true, OR: [{ quantity: { not: 0 } }, { updatedAt: { gte: startOfTradingDayIST() } }] }, orderBy: { updatedAt: 'desc' } }),
       this.prisma.brokerAccount.findMany({ where: { userId: user.id } }),
     ]);
     return {

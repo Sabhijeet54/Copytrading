@@ -13,6 +13,7 @@ import { PRISMA } from '../common/prisma/prisma.service';
 import { REDIS } from '../common/redis/redis.module';
 import { API_CONFIG, ApiConfig } from '../config/config.module';
 import { InstrumentsService } from '../market-data/instruments.service';
+import { startOfTradingDayIST } from '../admin/admin.service';
 import { isMarketOpen, MarketFeedService } from '../market-data/market-feed.service';
 import { instrumentKey, PriceCacheService } from '../market-data/price-cache.service';
 import { NotifyService } from '../realtime/notify.service';
@@ -550,7 +551,8 @@ export class CopyEngineService {
       const a0 = Number(cur.averagePrice);
       const q1 = q0 + signed;
       let avg = a0;
-      let realized = Number(cur.realizedPnl);
+      // Realized P&L is per trading day: a row last touched before today starts from 0 (no old P&L carried in).
+      let realized = cur.updatedAt < startOfTradingDayIST() ? 0 : Number(cur.realizedPnl);
       if (q0 === 0 || Math.sign(q0) === Math.sign(signed)) {
         avg = (Math.abs(q0) * a0 + qty * price) / (Math.abs(q0) + qty);
       } else {

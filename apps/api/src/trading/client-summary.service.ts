@@ -137,11 +137,12 @@ export class ClientSummaryService {
    */
   async tradeBook(userId: string) {
     const since = startOfTradingDayIST();
-    const subs = await this.prisma.strategyFollower.findMany({ where: { followerUserId: userId }, include: { strategy: { select: { name: true } } } });
+    // Disconnected / removed strategies and their trades are not shown to the client.
+    const subs = (await this.prisma.strategyFollower.findMany({ where: { followerUserId: userId }, include: { strategy: { select: { name: true } } } })).filter((x) => !isRemoved(x));
     const subName = new Map(subs.map((x) => [x.id, x.strategy.name]));
     const [orders, audits] = await Promise.all([
       this.prisma.copyOrder.findMany({
-        where: { followerUserId: userId, createdAt: { gte: since }, filledQuantity: { gt: 0 } },
+        where: { followerUserId: userId, createdAt: { gte: since }, filledQuantity: { gt: 0 }, strategyFollowerId: { in: subs.map((x) => x.id) } },
         include: { masterTrade: { select: { rawPayload: true } } },
         orderBy: { createdAt: 'asc' },
       }),

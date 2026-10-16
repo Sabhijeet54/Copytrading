@@ -9,21 +9,28 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { humanize } from '@/lib/format';
-import { type StrategyWithSub, useFollowStrategies, useToggleCopy } from '@/lib/trading';
+import { type StrategyWithSub, useDisconnectStrategy, useFollowStrategies, useToggleCopy } from '@/lib/trading';
+import Link from 'next/link';
 
 /** Client: the strategies an admin / master assigned to me, my allocation and Start / Stop. */
 export default function MyStrategiesPage() {
   const strategies = useFollowStrategies();
   const toggle = useToggleCopy();
+  const disconnect = useDisconnectStrategy();
   const [follow, setFollow] = useState<StrategyWithSub | null>(null);
 
   return (
     <>
-      <PageHeader title="My strategies" description="Strategies assigned to you. Set your lot multiplier / limits, then press Start to copy their trades." />
+      <PageHeader title="My strategies" description="Strategies you are connected to. Change the lot multiplier, Start / Stop copying, or Disconnect."
+        actions={
+          <Button asChild>
+            <Link href="/portfolio/marketplace">Browse marketplace</Link>
+          </Button>
+        } />
       <Card>
         <CardHeader>
-          <CardTitle>Assigned strategies</CardTitle>
-          <CardDescription>Only strategies given to you by your admin or master trader are listed here.</CardDescription>
+          <CardTitle>Connected strategies</CardTitle>
+          <CardDescription>Connect more from the Marketplace. Disconnecting removes the strategy and its trades from your screens.</CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           <Table>
@@ -41,7 +48,7 @@ export default function MyStrategiesPage() {
               {(strategies.data ?? []).length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
-                    {strategies.isLoading ? 'Loading…' : 'No strategy has been assigned to you yet — please contact your admin.'}
+                    {strategies.isLoading ? 'Loading…' : 'You are not connected to any strategy yet — open the Marketplace to connect one.'}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -61,7 +68,19 @@ export default function MyStrategiesPage() {
                     <TableCell>
                       <div className="flex justify-end gap-2">
                         <Button size="sm" variant="outline" onClick={() => setFollow(s)}>
-                          Settings
+                          Lot size
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive"
+                          disabled={disconnect.isPending}
+                          onClick={() => {
+                            if (!window.confirm(`Disconnect ${s.name}? Copying stops and its trades are removed from your screens. Open positions in your broker are not closed.`)) return;
+                            disconnect.mutate(s.id, { onSuccess: () => toast.success(`${s.name} disconnected`), onError: (e) => toast.error(e.message) });
+                          }}
+                        >
+                          Disconnect
                         </Button>
                         {s.subscription ? (
                           s.subscription.copyStatus === 'ON' ? (

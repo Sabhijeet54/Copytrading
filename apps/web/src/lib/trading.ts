@@ -567,3 +567,18 @@ export interface ResizeResult {
   ok: boolean;
   error?: string;
 }
+
+// ------------------------------------------------------------ client marketplace
+
+export type MarketplaceRow = StrategyWithSub & { connected: boolean };
+export const useMarketplace = () => useQuery({ queryKey: ['follow', 'marketplace'], queryFn: () => api<MarketplaceRow[]>('/follow/marketplace') });
+export function useDisconnectStrategy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (strategyId: string) => api<{ disconnected: boolean }>(`/follow/strategies/${strategyId}/disconnect`, { method: 'POST' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['follow'] });
+      void qc.invalidateQueries({ queryKey: ['client-dashboard'] });
+    },
+  });
+}

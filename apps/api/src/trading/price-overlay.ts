@@ -1,3 +1,4 @@
+import { startOfTradingDayIST } from '../admin/admin.service';
 import type { Exchange, Position } from '@ctp/database';
 import type { MarketFeedService } from '../market-data/market-feed.service';
 import { instrumentKey, type PriceCacheService } from '../market-data/price-cache.service';
@@ -24,7 +25,8 @@ export function paperPositionView(p: Position, prices: PriceCacheService, feed?:
     ...p,
     averagePrice: p.averagePrice.toString(),
     lastPrice: ltp == null ? null : String(ltp),
-    realizedPnl: p.realizedPnl.toString(),
+    // realized P&L is shown for today only (a carried-forward row last touched earlier shows 0)
+    realizedPnl: p.updatedAt < startOfTradingDayIST() ? '0' : p.realizedPnl.toString(),
     unrealizedPnl: unrealized.toFixed(2),
   };
 }

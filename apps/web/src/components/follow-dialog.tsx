@@ -11,7 +11,7 @@ import { Select } from '@/components/ui/select';
 import { brokerLabel, humanize } from '@/lib/format';
 import { useMyBrokerAccounts } from '@/lib/queries';
 import { toastResized } from '@/lib/resize-toast';
-import { type FollowInput, type StrategyWithSub, useFollow } from '@/lib/trading';
+import { type FollowInput, type StrategyWithSub, useFollow, useToggleCopy } from '@/lib/trading';
 
 const PRESETS = ['1', '2', '3', '5'];
 const num = (v: string | number | null | undefined) => (v == null || v === '' ? undefined : Number(v));
@@ -23,6 +23,7 @@ const num = (v: string | number | null | undefined) => (v == null || v === '' ? 
 export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClose: () => void }) {
   const accounts = useMyBrokerAccounts();
   const follow = useFollow();
+  const toggle = useToggleCopy();
   const [brokerAccountId, setBrokerAccountId] = useState('');
   const [mult, setMult] = useState('1');
   const [applyOpen, setApplyOpen] = useState(true);
@@ -58,7 +59,14 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
       { strategyId: s.id, body },
       {
         onSuccess: (r) => {
-          toast.success(`Saved — ${m}× lots`);
+          const isNew = !s.subscription;
+          toast.success(isNew ? `Connected to ${s.name} — ${m}× lots` : `Saved — ${m}× lots`);
+          // New connection from the marketplace: start copying right away (needs a connected broker).
+          if (isNew)
+            toggle.mutate(
+              { id: r.id, action: 'start' },
+              { onError: (e) => toast.warning(`Connected, copying not started: ${e.message}. Press Start in My strategies.`) },
+            );
           toastResized(r.resized);
           if (applyOpen && !(r.resized ?? []).length) toast.info('No open trade in this strategy — the new size applies from the next trade.');
           onClose();
@@ -72,7 +80,7 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
     <Dialog open={!!s} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>{s?.name}</DialogTitle>
+          <DialogTitle>{s?.subscription ? s?.name : `Connect ${s?.name ?? ''}`}</DialogTitle>
           <DialogDescription>How many lots to copy for every master trade. Copying starts only when you press Start.</DialogDescription>
         </DialogHeader>
         {accounts.data && accounts.data.length === 0 ? (
@@ -127,7 +135,7 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
             </label>
             <DialogFooter>
               <Button type="submit" disabled={follow.isPending || !brokerAccountId || !valid}>
-                {follow.isPending ? 'Saving…' : 'Save'}
+                {follow.isPending ? 'Saving…' : s?.subscription ? 'Save' : 'Connect'}
               </Button>
             </DialogFooter>
           </form>
