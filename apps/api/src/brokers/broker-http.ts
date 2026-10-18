@@ -60,7 +60,7 @@ export function isRetryable(err: unknown): boolean {
 }
 
 export interface BrokerRequest {
-  method?: 'GET' | 'POST' | 'DELETE' | 'PUT';
+  method?: 'GET' | 'POST' | 'DELETE' | 'PUT' | 'PATCH';
   headers?: Record<string, string>;
   body?: string;
   /** Static-IP egress proxy; requests go direct when undefined. */

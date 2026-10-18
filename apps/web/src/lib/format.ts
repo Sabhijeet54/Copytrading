@@ -38,6 +38,16 @@ export function brokerLabel(broker: string): string {
       return 'Zerodha';
     case 'ANGEL_ONE':
       return 'Angel One';
+    case 'UPSTOX':
+      return 'Upstox';
+    case 'DHAN':
+      return 'Dhan';
+    case 'FYERS':
+      return 'Fyers';
+    case 'KOTAK_NEO':
+      return 'Kotak Neo';
+    case 'FIVE_PAISA':
+      return '5paisa';
     case 'MOCK':
       return 'Paper (Mock)';
     default:

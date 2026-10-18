@@ -4,11 +4,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import { qk } from './queries';
 
-export type BrokerSlug = 'angel-one' | 'zerodha';
-type SecretKey = 'apiKey' | 'apiSecret' | 'pin' | 'totpSecret' | 'proxyUser' | 'proxyPass';
+export type BrokerSlug = 'angel-one' | 'zerodha' | 'upstox' | 'dhan' | 'fyers' | 'kotak-neo' | '5paisa';
+type SecretKey = 'apiKey' | 'apiSecret' | 'pin' | 'totpSecret' | 'proxyUser' | 'proxyPass' | 'mobile' | 'userId';
 
 export interface BrokerApiConfigView {
-  broker: 'ANGEL_ONE' | 'ZERODHA';
+  broker: 'ANGEL_ONE' | 'ZERODHA' | 'UPSTOX' | 'DHAN' | 'FYERS' | 'KOTAK_NEO' | 'FIVE_PAISA';
   clientCode: string | null;
   proxyHost: string | null;
   proxyPort: number | null;
@@ -33,6 +33,8 @@ export interface SaveBrokerApiConfigInput {
   proxyPort?: number;
   proxyUser?: string;
   proxyPass?: string;
+  mobile?: string;
+  userId?: string;
   autoLogin?: boolean;
   consent?: boolean;
 }
@@ -48,7 +50,7 @@ export function useBrokerApiMutations(b: BrokerSlug) {
     save: useMutation({ mutationFn: (body: SaveBrokerApiConfigInput) => api<BrokerApiConfigView>(`/brokers/api-config/${b}`, { method: 'PUT', body }), onSuccess: set }),
     test: useMutation({ mutationFn: () => api<BrokerApiConfigView>(`/brokers/api-config/${b}/test`, { method: 'POST' }), onSuccess: set }),
     connect: useMutation({
-      mutationFn: () => api<{ loginUrl?: string; account?: unknown }>(`/brokers/api-config/${b}/connect`, { method: 'POST' }),
+      mutationFn: (body?: { accessToken?: string }) => api<{ loginUrl?: string; account?: unknown }>(`/brokers/api-config/${b}/connect`, { method: 'POST', body: body ?? {} }),
       onSuccess: () => {
         void qc.invalidateQueries({ queryKey: key(b) });
         void qc.invalidateQueries({ queryKey: qk.myBrokerAccounts });

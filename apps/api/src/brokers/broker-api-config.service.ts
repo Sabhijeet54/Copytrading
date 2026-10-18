@@ -8,6 +8,11 @@ import { BrokerApiError, brokerFetch } from './broker-http';
 import { BrokerSessionService } from './broker-session.service';
 import { extractTotpSecret, totp } from './totp';
 import { ZerodhaClient } from './zerodha/zerodha.client';
+import { UpstoxClient, upstoxTokenExpiry } from '../trading/upstox.adapter';
+import { DhanClient } from '../trading/dhan.adapter';
+import { FyersClient } from '../trading/fyers.adapter';
+import { KotakNeoClient } from '../trading/kotak.adapter';
+import { FivePaisaClient } from '../trading/fivepaisa.adapter';
 
 /** Secrets kept encrypted; never sent back to the browser. */
 interface Secrets {
@@ -17,8 +22,26 @@ interface Secrets {
   totpSecret?: string;
   proxyUser?: string;
   proxyPass?: string;
+  /** Kotak Neo: registered mobile number. */
+  mobile?: string;
+  /** 5paisa: API "User ID" from the Xtream dashboard. */
+  userId?: string;
 }
-const SECRET_KEYS: (keyof Secrets)[] = ['apiKey', 'apiSecret', 'pin', 'totpSecret', 'proxyUser', 'proxyPass'];
+const SECRET_KEYS: (keyof Secrets)[] = ['apiKey', 'apiSecret', 'pin', 'totpSecret', 'proxyUser', 'proxyPass', 'mobile', 'userId'];
+/** Internal (never shown, never typed by the client): Fyers refresh token for the daily PIN refresh. */
+interface StoredSecrets extends Secrets {
+  refreshToken?: string;
+}
+
+/** Brokers that log in server-side every trading morning (no browser): TOTP / PIN, or Fyers refresh token + PIN. */
+const AUTO_LOGIN_BROKERS: BrokerName[] = ['ANGEL_ONE', 'DHAN', 'KOTAK_NEO', 'FIVE_PAISA', 'FYERS'];
+
+/** Next occurrence of hh:mm IST (today if still ahead, else tomorrow). */
+function nextIst(hh: number, mm: number, now = new Date()): Date {
+  const ist = new Date(now.getTime() + 330 * 60_000);
+  const at = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate(), hh, mm) - 330 * 60_000;
+  return new Date(at > now.getTime() ? at : at + 86_400_000);
+}
 
 export interface SaveBrokerApiConfigInput extends Secrets {
   clientCode?: string;
@@ -48,10 +71,11 @@ const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
 const HOST = /^(?=.{1,253}$)([a-zA-Z0-9-]{1,63}\.)*[a-zA-Z0-9-]{1,63}$/;
 
 /**
- * The client's own broker API app and static-IP proxy (Angel One / Zerodha each separately):
+ * The client's own broker API app and static-IP proxy (one config per broker):
  * save (encrypted) → test proxy health (which IP do we really leave from?) → connect.
  * Angel One connects server-side with PIN + TOTP (and again every trading morning when autoLogin is on);
- * Zerodha only allows its browser login, so connect returns the Kite login URL for the client's own app.
+ * Dhan, Kotak Neo and 5paisa connect server-side with PIN + TOTP too (auto-login each morning); Fyers refreshes
+ * with its refresh token + PIN after one browser login. Zerodha / Upstox / Fyers browser logins return a login URL.
  * The session then carries { apiKey, proxyUrl } so every order for that account uses the client's app and IP.
  */
 @Injectable()
@@ -79,19 +103,31 @@ export class BrokerApiConfigService implements OnApplicationBootstrap, OnModuleD
 
   private redirectUrl(broker: BrokerName): string {
     const base = this.config.API_PUBLIC_URL?.replace(/\/$/, '') ?? '';
+    if (broker === 'UPSTOX') return `${base}/brokers/upstox/callback`;
+    if (broker === 'FYERS') return `${base}/brokers/fyers/callback`;
     return broker === 'ZERODHA'
       ? (this.config.ZERODHA_REDIRECT_URL ?? `${base}/brokers/zerodha/callback`)
       : (this.config.ANGEL_REDIRECT_URL ?? `${base}/brokers/angel-one/callback`);
   }
 
-  private secretsOf(row: BrokerApiConfig | null): Secrets {
-    return (row && this.sessions.openJson<Secrets>(row.encryptedSecrets, row.id)) ?? {};
+  private secretsOf(row: BrokerApiConfig | null): StoredSecrets {
+    return (row && this.sessions.openJson<StoredSecrets>(row.encryptedSecrets, row.id)) ?? {};
   }
 
   private required(broker: BrokerName): (keyof Secrets | 'clientCode' | 'proxyHost' | 'proxyPort')[] {
-    return broker === 'ANGEL_ONE'
-      ? ['clientCode', 'apiKey', 'pin', 'totpSecret', 'proxyHost', 'proxyPort']
-      : ['apiKey', 'apiSecret', 'proxyHost', 'proxyPort'];
+    const proxy = ['proxyHost', 'proxyPort'] as const;
+    switch (broker) {
+      case 'ANGEL_ONE':
+        return ['clientCode', 'apiKey', 'pin', 'totpSecret', ...proxy];
+      case 'DHAN':
+        return ['clientCode', 'pin', 'totpSecret', ...proxy];
+      case 'KOTAK_NEO':
+        return ['clientCode', 'apiKey', 'mobile', 'pin', 'totpSecret', ...proxy];
+      case 'FIVE_PAISA':
+        return ['clientCode', 'apiKey', 'apiSecret', 'userId', 'pin', 'totpSecret', ...proxy];
+      default: // ZERODHA, UPSTOX, FYERS: own app key + secret, browser login
+        return ['apiKey', 'apiSecret', ...proxy];
+    }
   }
 
   private missing(row: BrokerApiConfig | null, broker: BrokerName): string[] {
@@ -155,11 +191,12 @@ export class BrokerApiConfigService implements OnApplicationBootstrap, OnModuleD
       existing ??
       (await this.prisma.brokerApiConfig.create({ data: { userId, broker } }));
     const current = this.secretsOf(existing);
-    const next: Secrets = { ...current };
+    const next: StoredSecrets = { ...current };
     for (const k of SECRET_KEYS) {
       const v = dto[k]?.trim();
       if (v) next[k] = v;
     }
+    if (next.mobile) next.mobile = next.mobile.replace(/[\s-]/g, '');
     const proxyChanged = dto.proxyHost !== undefined && dto.proxyHost !== row.proxyHost;
     const saved = await this.prisma.brokerApiConfig.update({
       where: { id: row.id },
@@ -243,6 +280,52 @@ export class BrokerApiConfigService implements OnApplicationBootstrap, OnModuleD
     }
   }
 
+  // ------------------------------------------------------------ Upstox
+
+  private upstoxClient(row: BrokerApiConfig, s: Secrets): UpstoxClient {
+    return new UpstoxClient({ apiKey: s.apiKey!, apiSecret: s.apiSecret, redirectUrl: this.redirectUrl('UPSTOX'), proxyUrl: this.proxyUrlOf(row, s) });
+  }
+
+  /** Upstox: login dialog URL of the client's own app (its redirect URL must point to our callback). */
+  async upstoxLoginUrl(userId: string): Promise<{ loginUrl: string }> {
+    const row = await this.row(userId, 'UPSTOX');
+    const missing = this.missing(row, 'UPSTOX');
+    if (!row || missing.length) throw new BadRequestException(`Fill and save: ${missing.join(', ')}`);
+    const state = await this.sessions.createState(userId, 'UPSTOX');
+    return { loginUrl: this.upstoxClient(row, this.secretsOf(row)).loginUrl(state) };
+  }
+
+  /** Upstox: stores a session from an OAuth code (callback) or a pasted access token, checked against the profile API. */
+  async connectUpstox(userId: string, input: { code?: string; accessToken?: string }, client?: ClientInfo) {
+    const row = await this.row(userId, 'UPSTOX');
+    if (!row) throw new BadRequestException('Save your Upstox API details first');
+    const s = this.secretsOf(row);
+    const missing = this.missing(row, 'UPSTOX').filter((k) => !(input.accessToken && k === 'apiSecret'));
+    if (missing.length) throw new BadRequestException(`Fill and save: ${missing.join(', ')}`);
+    const up = this.upstoxClient(row, s);
+    try {
+      const token = input.accessToken?.trim() || (await up.exchangeCode(input.code ?? '')).accessToken;
+      const profile = await up.profile(token);
+      if (row.clientCode && profile.userId.toUpperCase() !== row.clientCode.toUpperCase()) {
+        throw new BrokerApiError(`This token belongs to ${profile.userId}, but the saved client code is ${row.clientCode}`);
+      }
+      const proxyUrl = this.proxyUrlOf(row, s);
+      const account = await this.sessions.saveSession(
+        userId,
+        'UPSTOX',
+        { brokerClientId: profile.userId.toUpperCase(), accessToken: token, extra: { apiKey: s.apiKey, proxyUrl }, expiresAt: upstoxTokenExpiry() },
+        client,
+      );
+      await this.prisma.brokerApiConfig.update({ where: { id: row.id }, data: { lastLoginAt: new Date(), lastLoginError: null } });
+      return account;
+    } catch (err) {
+      const message = (err as Error).message.replace(/\/\/[^@\s]*@/g, '//***@').slice(0, 300);
+      await this.prisma.brokerApiConfig.update({ where: { id: row.id }, data: { lastLoginError: message } });
+      if (err instanceof BrokerApiError) throw new BadRequestException(await this.sessions.recordError(userId, 'UPSTOX', err));
+      throw err;
+    }
+  }
+
   /** Zerodha: Kite login URL for the client's own app (redirect URL in that app must point to our callback). */
   async zerodhaLoginUrl(userId: string): Promise<{ loginUrl: string }> {
     const row = await this.row(userId, 'ZERODHA');
@@ -263,7 +346,183 @@ export class BrokerApiConfigService implements OnApplicationBootstrap, OnModuleD
     return { client: new ZerodhaClient({ apiKey: s.apiKey, apiSecret: s.apiSecret, proxyUrl }), extra: { apiKey: s.apiKey, proxyUrl } };
   }
 
-  // ------------------------------------------------------------ daily auto-login (Angel One)
+  // ------------------------------------------------------- Dhan / Kotak Neo / 5paisa / Fyers
+
+  /** Common wrapper: loads the saved config, checks required fields, records the login result. */
+  private async login(
+    userId: string,
+    broker: BrokerName,
+    skip: string[],
+    work: (row: BrokerApiConfig, s: StoredSecrets, proxyUrl: string | undefined) => Promise<Parameters<BrokerSessionService['saveSession']>[2]>,
+    client?: ClientInfo,
+  ) {
+    const row = await this.row(userId, broker);
+    const missing = this.missing(row, broker).filter((k) => !skip.includes(k));
+    if (!row || missing.length) throw new BadRequestException(`Fill and save: ${missing.join(', ')}`);
+    const s = this.secretsOf(row);
+    const proxyUrl = this.proxyUrlOf(row, s);
+    try {
+      const material = await work(row, s, proxyUrl);
+      const account = await this.sessions.saveSession(userId, broker, material, client);
+      await this.prisma.brokerApiConfig.update({ where: { id: row.id }, data: { lastLoginAt: new Date(), lastLoginError: null } });
+      return account;
+    } catch (err) {
+      const message = (err as Error).message.replace(/\/\/[^@\s]*@/g, '//***@').slice(0, 300);
+      await this.prisma.brokerApiConfig.update({ where: { id: row.id }, data: { lastLoginError: message } });
+      if (err instanceof BrokerApiError) throw new BadRequestException(await this.sessions.recordError(userId, broker, err));
+      throw err;
+    }
+  }
+
+  private sameClient(actual: string, saved: string | null) {
+    if (saved && actual.toUpperCase() !== saved.toUpperCase()) throw new BrokerApiError(`Logged in as ${actual}, but the saved client code is ${saved}`);
+  }
+
+  /** Dhan: access token from client ID + PIN + TOTP (24 h) — or a pasted token from web.dhan.co. */
+  connectDhan(userId: string, input: { accessToken?: string }, client?: ClientInfo) {
+    const pasted = input.accessToken?.trim();
+    return this.login(
+      userId,
+      'DHAN',
+      pasted ? ['pin', 'totpSecret'] : [],
+      async (row, s, proxyUrl) => {
+        const dhan = new DhanClient(proxyUrl);
+        const clientId = row.clientCode!;
+        let token: string;
+        let expiresAt: Date;
+        if (pasted) {
+          await dhan.check(clientId, pasted);
+          token = pasted;
+          expiresAt = new Date(Date.now() + 23.5 * 3600_000);
+        } else {
+          const r = await dhan.loginWithTotp(clientId, s.pin!, totp(s.totpSecret!));
+          this.sameClient(r.clientId, clientId);
+          token = r.accessToken;
+          expiresAt = r.expiresAt;
+        }
+        return { brokerClientId: clientId.toUpperCase(), accessToken: token, extra: { clientId, proxyUrl }, expiresAt };
+      },
+      client,
+    );
+  }
+
+  /** Kotak Neo: consumer key + mobile + UCC + TOTP → MPIN, server-side. */
+  connectKotak(userId: string, client?: ClientInfo) {
+    return this.login(
+      userId,
+      'KOTAK_NEO',
+      [],
+      async (row, s, proxyUrl) => {
+        const k = await new KotakNeoClient({ consumerKey: s.apiKey!, proxyUrl }).login(s.mobile!, row.clientCode!, totp(s.totpSecret!), s.pin!);
+        this.sameClient(k.ucc, row.clientCode);
+        return {
+          brokerClientId: k.ucc,
+          accessToken: k.token,
+          extra: { apiKey: s.apiKey, sid: k.sid, serverId: k.serverId, baseUrl: k.baseUrl, proxyUrl },
+          expiresAt: nextIst(5, 0),
+        };
+      },
+      client,
+    );
+  }
+
+  /** 5paisa: TOTP + PIN → request token → access token (valid till 11:59 PM). */
+  connectFivePaisa(userId: string, client?: ClientInfo) {
+    return this.login(
+      userId,
+      'FIVE_PAISA',
+      [],
+      async (row, s, proxyUrl) => {
+        const r = await new FivePaisaClient({ userKey: s.apiKey!, encryptionKey: s.apiSecret!, userId: s.userId!, proxyUrl }).login(row.clientCode!, totp(s.totpSecret!), s.pin!);
+        this.sameClient(r.clientCode, row.clientCode);
+        return { brokerClientId: r.clientCode.toUpperCase(), accessToken: r.accessToken, extra: { apiKey: s.apiKey, clientCode: r.clientCode, proxyUrl }, expiresAt: nextIst(23, 55) };
+      },
+      client,
+    );
+  }
+
+  private fyersClient(row: BrokerApiConfig, s: Secrets): FyersClient {
+    return new FyersClient({ appId: s.apiKey!, secret: s.apiSecret, redirectUrl: this.redirectUrl('FYERS'), proxyUrl: this.proxyUrlOf(row, s) });
+  }
+
+  /** Fyers: login page of the client's own app (redirect URL in the app must point to our callback). */
+  async fyersLoginUrl(userId: string): Promise<{ loginUrl: string }> {
+    const row = await this.row(userId, 'FYERS');
+    const missing = this.missing(row, 'FYERS');
+    if (!row || missing.length) throw new BadRequestException(`Fill and save: ${missing.join(', ')}`);
+    const state = await this.sessions.createState(userId, 'FYERS');
+    return { loginUrl: this.fyersClient(row, this.secretsOf(row)).loginUrl(state) };
+  }
+
+  /**
+   * Fyers session from the OAuth auth code (callback), or — every morning — from the stored refresh token +
+   * the client's PIN (no browser). The refresh token is kept encrypted with the config.
+   */
+  connectFyers(userId: string, input: { code?: string }, client?: ClientInfo) {
+    return this.login(
+      userId,
+      'FYERS',
+      [],
+      async (row, s) => {
+        const fy = this.fyersClient(row, s);
+        let t: { accessToken: string; refreshToken: string | null };
+        if (input.code) t = await fy.exchangeCode(input.code);
+        else {
+          if (!s.refreshToken || !s.pin) throw new BrokerApiError('Fyers needs a fresh login (no saved refresh token / PIN) — press Connect Broker.');
+          t = await fy.refresh(s.refreshToken, s.pin);
+        }
+        const profile = await fy.profile(t.accessToken);
+        this.sameClient(profile.userId, row.clientCode);
+        if (t.refreshToken) {
+          await this.prisma.brokerApiConfig.update({ where: { id: row.id }, data: { encryptedSecrets: this.sessions.sealJson({ ...s, refreshToken: t.refreshToken }, row.id) } });
+        }
+        return { brokerClientId: profile.userId.toUpperCase(), accessToken: t.accessToken, extra: { apiKey: s.apiKey, proxyUrl: this.proxyUrlOf(row, s) }, expiresAt: nextIst(6, 25) };
+      },
+      client,
+    );
+  }
+
+  /** One entry point for the Broker API page "Connect Broker" button. */
+  async connect(userId: string, broker: BrokerName, input: { accessToken?: string }, client?: ClientInfo): Promise<{ loginUrl?: string; account?: Awaited<ReturnType<BrokerSessionService['saveSession']>> }> {
+    switch (broker) {
+      case 'ANGEL_ONE':
+        return { account: await this.connectAngel(userId, client) };
+      case 'ZERODHA':
+        return this.zerodhaLoginUrl(userId);
+      case 'UPSTOX':
+        return input.accessToken ? { account: await this.connectUpstox(userId, input, client) } : this.upstoxLoginUrl(userId);
+      case 'DHAN':
+        return { account: await this.connectDhan(userId, input, client) };
+      case 'KOTAK_NEO':
+        return { account: await this.connectKotak(userId, client) };
+      case 'FIVE_PAISA':
+        return { account: await this.connectFivePaisa(userId, client) };
+      case 'FYERS':
+        return this.fyersLoginUrl(userId);
+      default:
+        throw new BadRequestException('Unsupported broker');
+    }
+  }
+
+  // ------------------------------------------------------------ daily auto-login
+
+  /** Server-side morning login for one saved config (no browser). */
+  private autoLogin(r: BrokerApiConfig) {
+    switch (r.broker) {
+      case 'ANGEL_ONE':
+        return this.connectAngel(r.userId);
+      case 'DHAN':
+        return this.connectDhan(r.userId, {});
+      case 'KOTAK_NEO':
+        return this.connectKotak(r.userId);
+      case 'FIVE_PAISA':
+        return this.connectFivePaisa(r.userId);
+      case 'FYERS':
+        return this.connectFyers(r.userId, {});
+      default:
+        return Promise.resolve(null);
+    }
+  }
 
   private async autoLoginTick(): Promise<void> {
     const t = this.config.ANGEL_AUTO_LOGIN_TIME;
@@ -275,18 +534,22 @@ export class BrokerApiConfigService implements OnApplicationBootstrap, OnModuleD
     const [h, m] = t.split(':').map(Number) as [number, number];
     if (wd === 0 || wd === 6 || mins < h * 60 + m || mins > 15 * 60 + 30 || this.autoLoginDay === day) return;
     this.autoLoginDay = day;
-    const rows = await this.prisma.brokerApiConfig.findMany({ where: { broker: 'ANGEL_ONE', autoLogin: true, user: { status: 'ACTIVE' } } });
-    let ok = 0;
+    const rows = await this.prisma.brokerApiConfig.findMany({ where: { broker: { in: AUTO_LOGIN_BROKERS }, autoLogin: true, user: { status: 'ACTIVE' } } });
+    const done: Record<string, number> = {};
     for (const r of rows) {
-      if (this.missing(r, 'ANGEL_ONE').length) continue;
-      try {
-        await this.connectAngel(r.userId);
-        ok++;
-      } catch (err) {
-        this.logger.warn(`Auto-login failed for user ${r.userId}: ${(err as Error).message}`);
+      if (this.missing(r, r.broker).length) continue;
+      if (r.broker === 'FYERS') {
+        const s = this.secretsOf(r);
+        if (!s.refreshToken || !s.pin) continue; // needs a browser login first
       }
-      await new Promise((res) => setTimeout(res, 1200)); // stay under Angel's login rate limit
+      try {
+        await this.autoLogin(r);
+        done[r.broker] = (done[r.broker] ?? 0) + 1;
+      } catch (err) {
+        this.logger.warn(`${r.broker} auto-login failed for user ${r.userId}: ${(err as Error).message}`);
+      }
+      await new Promise((res) => setTimeout(res, 1200)); // stay under broker login rate limits
     }
-    this.logger.log(`Angel One auto-login: ${ok}/${rows.length} connected`);
+    this.logger.log(`Auto-login: ${Object.entries(done).map(([b, n]) => `${b} ${n}`).join(', ') || 'none'} of ${rows.length}`);
   }
 }

@@ -149,7 +149,7 @@ export const apiEnvSchema = baseSchema
     LICENCE_REQUIRED: booleanFlag(false),
     /** true: a live client account without its own static-IP proxy is never sent orders (shown as skipped). */
     REQUIRE_CLIENT_PROXY: booleanFlag(false),
-    /** IST HH:MM to auto-login Angel One clients that saved PIN + TOTP (weekdays). Empty = disabled. */
+    /** IST HH:MM to auto-login clients that saved PIN + TOTP (Angel One, Dhan, Kotak Neo, 5paisa) or a Fyers refresh token (weekdays). Empty = disabled. */
     ANGEL_AUTO_LOGIN_TIME: z
       .string()
       .optional()

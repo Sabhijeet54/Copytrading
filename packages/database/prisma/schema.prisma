@@ -32,6 +32,11 @@ enum UserStatus {
 enum BrokerName {
   ZERODHA
   ANGEL_ONE
+  UPSTOX
+  DHAN
+  FYERS
+  KOTAK_NEO
+  FIVE_PAISA
   MOCK
 }
 

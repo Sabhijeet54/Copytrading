@@ -1,5 +1,7 @@
 'use client';
 
+import { brokerLabel } from '@/lib/format';
+
 import { createContext, useContext, useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { io, type Socket } from 'socket.io-client';
@@ -23,7 +25,7 @@ export function useRealtimeEvent<T>(event: string, handler: (payload: T) => void
   }, [socket, event, handler]);
 }
 
-const brokerName = (b: string) => (b === 'ZERODHA' ? 'Zerodha' : b === 'ANGEL_ONE' ? 'Angel One' : b);
+const brokerName = (b: string) => brokerLabel(b);
 
 /**
  * One Socket.IO connection per signed-in tab, through the Next.js proxy (/api/socket.io), authenticated by

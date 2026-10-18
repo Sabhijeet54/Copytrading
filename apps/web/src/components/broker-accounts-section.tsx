@@ -47,7 +47,7 @@ export function BrokerAccountsSection({ user }: { user: AuthUser }) {
             {user.role === 'FOLLOWER' ? (
               <>
                 {' '}
-                For live trading set up your own API app and static IP in{' '}
+                Dhan, Fyers, Kotak Neo, 5paisa and Upstox connect from{' '}
                 <Link href="/broker-api" className="font-medium text-primary hover:underline">
                   Broker API
                 </Link>
@@ -55,7 +55,7 @@ export function BrokerAccountsSection({ user }: { user: AuthUser }) {
               </>
             ) : null}
           </p>
-          <BrokerConnectButtons angelClientCode={angel?.brokerClientId ?? undefined} isMaster={user.role === 'MASTER'} />
+          <BrokerConnectButtons angelClientCode={angel?.brokerClientId ?? undefined} isMaster={user.role === 'MASTER'} hideZerodha={user.role !== 'FOLLOWER'} />
         </div>
       </CardContent>
     </Card>

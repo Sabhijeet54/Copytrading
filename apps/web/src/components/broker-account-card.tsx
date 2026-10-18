@@ -52,6 +52,9 @@ export function BrokerAccountCard({ account: a }: { account: BrokerAccountView }
     else if (a.broker === 'ANGEL_ONE') {
       if (available.data?.angelOnePublisherLogin) start.mutate('angel-one', { onError: (e) => toast.error(e.message) });
       else setAngelOpen(true);
+    } else {
+      const slug = ({ UPSTOX: 'upstox', DHAN: 'dhan', FYERS: 'fyers', KOTAK_NEO: 'kotak-neo', FIVE_PAISA: '5paisa' } as Record<string, string>)[a.broker];
+      if (slug) window.location.href = `/broker-api?broker=${slug}`;
     }
   };
 

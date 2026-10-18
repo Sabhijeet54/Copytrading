@@ -52,6 +52,8 @@ export interface DisconnectOptions {
  * Owns broker login state (CSRF `state` in Redis), token exchange and encrypted persistence.
  * Raw tokens only ever exist in memory here and in BrokerCredential as AES-256-GCM ciphertext.
  */
+const brokerTitle = (b: string) => (b === 'ZERODHA' ? 'Zerodha' : b === 'UPSTOX' ? 'Upstox' : 'Angel One');
+
 @Injectable()
 export class BrokerSessionService {
   private readonly logger = new Logger('BrokerSession');
@@ -259,7 +261,7 @@ export class BrokerSessionService {
         userId: old.userId,
         type: 'BROKER_TAKEN_OVER',
         severity: 'WARNING',
-        title: `${broker === 'ZERODHA' ? 'Zerodha' : 'Angel One'} ${s.brokerClientId} disconnected`,
+        title: `${brokerTitle(broker)} ${s.brokerClientId} disconnected`,
         body: TAKEOVER_REASON,
         data: { brokerAccountId: old.id },
       });
@@ -406,7 +408,7 @@ export class BrokerSessionService {
         userId: account.userId,
         type: 'BROKER_DISCONNECTED',
         severity: 'WARNING',
-        title: `${account.broker === 'ZERODHA' ? 'Zerodha' : 'Angel One'} ${account.brokerClientId ?? ''} disconnected`,
+        title: `${brokerTitle(account.broker)} ${account.brokerClientId ?? ''} disconnected`,
         body: reason,
         data: { brokerAccountId: account.id },
       });
@@ -442,7 +444,7 @@ export class BrokerSessionService {
       userId: account.userId,
       type: 'BROKER_TOKEN_EXPIRED',
       severity: 'WARNING',
-      title: `${account.broker === 'ZERODHA' ? 'Zerodha' : 'Angel One'} session expired`,
+      title: `${brokerTitle(account.broker)} session expired`,
       body: 'Reconnect your broker to resume copy trading.',
       data: { brokerAccountId: account.id },
     });

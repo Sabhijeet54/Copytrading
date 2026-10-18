@@ -49,13 +49,21 @@ export class SaveBrokerApiConfigDto {
   @apply(opt(500)) totpSecret?: string;
   @apply(opt(253)) proxyHost?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(65535) proxyPort?: number;
+  @IsOptional() @Transform(trim) @Matches(/^(\+?\d[\d\s-]{8,15})?$/, { message: 'Enter the mobile number registered with the broker' }) mobile?: string;
+  @apply(opt(200)) userId?: string;
   @apply(opt(200)) proxyUser?: string;
   @apply(opt(200)) proxyPass?: string;
   @IsOptional() @IsBoolean() autoLogin?: boolean;
   @IsOptional() @IsBoolean() consent?: boolean;
 }
 
-const BROKER_SLUG: Record<string, BrokerName> = { 'angel-one': 'ANGEL_ONE', zerodha: 'ZERODHA' };
+export class ConnectApiConfigDto {
+  /** Upstox: access token generated in the Upstox developer portal (optional). */
+  @IsOptional() @Transform(trim) @IsString() @MaxLength(4000) accessToken?: string;
+}
+
+const BROKER_SLUG: Record<string, BrokerName> = { 'angel-one': 'ANGEL_ONE', zerodha: 'ZERODHA', upstox: 'UPSTOX', dhan: 'DHAN', fyers: 'FYERS', 'kotak-neo': 'KOTAK_NEO', '5paisa': 'FIVE_PAISA' };
+const SLUG_OF: Record<string, string> = Object.fromEntries(Object.entries(BROKER_SLUG).map(([k, v]) => [v, k]));
 function brokerFromSlug(slug: string): BrokerName {
   const b = BROKER_SLUG[slug];
   if (!b) throw new NotFoundException('Unknown broker');
@@ -101,10 +109,9 @@ export class BrokersController {
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @Post('api-config/:broker/connect')
-  async connectApiConfig(@CurrentUser() user: RequestUser, @Param('broker') broker: string, @Req() req: Request) {
-    const b = brokerFromSlug(broker);
-    if (b === 'ZERODHA') return this.apiConfigs.zerodhaLoginUrl(user.id);
-    return { account: toBrokerAccountView(await this.apiConfigs.connectAngel(user.id, clientInfo(req))) };
+  async connectApiConfig(@CurrentUser() user: RequestUser, @Param('broker') broker: string, @Body() dto: ConnectApiConfigDto, @Req() req: Request) {
+    const r = await this.apiConfigs.connect(user.id, brokerFromSlug(broker), { accessToken: dto?.accessToken }, clientInfo(req));
+    return r.account ? { account: toBrokerAccountView(r.account) } : { loginUrl: r.loginUrl };
   }
 
   @Get('accounts')
@@ -160,6 +167,36 @@ export class BrokersController {
         },
         clientInfo(req),
       );
+    });
+  }
+
+  // ------------------------------------------------------------- Upstox
+
+  /** Upstox redirects the browser here with ?code=…&state=… after the client logs in to their own app. */
+  @Public()
+  @Get('upstox/callback')
+  async upstoxCallback(@Query('code') code: string | undefined, @Query('state') state: string | undefined, @Req() req: Request, @Res() res: Response): Promise<void> {
+    await this.handleCallback('UPSTOX', state, res, async (userId) => {
+      if (!code) throw new BrokerApiError('Upstox login was cancelled or failed.');
+      return this.apiConfigs.connectUpstox(userId, { code }, clientInfo(req));
+    });
+  }
+
+  // -------------------------------------------------------------- Fyers
+
+  /** Fyers redirects here with ?s=ok&auth_code=…&state=… after the client logs in to their own app. */
+  @Public()
+  @Get('fyers/callback')
+  async fyersCallback(
+    @Query('auth_code') authCode: string | undefined,
+    @Query('s') s: string | undefined,
+    @Query('state') state: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ): Promise<void> {
+    await this.handleCallback('FYERS', state, res, async (userId) => {
+      if (!authCode || (s && s !== 'ok')) throw new BrokerApiError('Fyers login was cancelled or failed.');
+      return this.apiConfigs.connectFyers(userId, { code: authCode }, clientInfo(req));
     });
   }
 
@@ -228,7 +265,7 @@ export class BrokersController {
 
   /** Runs a broker callback and always redirects the browser back to the web app with a result. */
   private async handleCallback(broker: BrokerName, state: string | undefined, res: Response, work: (userId: string) => Promise<unknown>) {
-    const slug = broker === 'ZERODHA' ? 'zerodha' : 'angel-one';
+    const slug = SLUG_OF[broker] ?? 'angel-one';
     const back = new URL('/dashboard', this.config.WEB_ORIGIN);
     back.searchParams.set('broker', slug);
     let userId: string | undefined;

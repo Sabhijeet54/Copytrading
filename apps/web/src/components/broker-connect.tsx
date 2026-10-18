@@ -87,14 +87,14 @@ export function AngelOneLoginDialog({ open, onOpenChange, defaultClientCode }: {
 }
 
 /** Connect / re-login buttons for each configured broker. */
-export function BrokerConnectButtons({ angelClientCode, isMaster = false }: { angelClientCode?: string; isMaster?: boolean }) {
+export function BrokerConnectButtons({ angelClientCode, isMaster = false, hideZerodha = isMaster }: { angelClientCode?: string; isMaster?: boolean; hideZerodha?: boolean }) {
   const available = useBrokerAvailability();
   const start = useStartBrokerLogin();
   const [angelOpen, setAngelOpen] = useState(false);
   if (!available.data) return null;
   const { angelOne, angelOnePublisherLogin } = available.data;
-  // Master uses Angel One only (Zerodha removed for the master).
-  const zerodha = available.data.zerodha && !isMaster;
+  // Master and admin use Angel One only (Zerodha removed for them).
+  const zerodha = available.data.zerodha && !hideZerodha;
   if (!zerodha && !angelOne) {
     return <p className="text-sm text-muted-foreground">No broker is configured on the server yet.</p>;
   }

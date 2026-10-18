@@ -511,7 +511,7 @@ export function MyAccountSection() {
       {live.isLoading ? <p className="text-sm text-muted-foreground">Loading live data…</p> : null}
       {live.data && live.data.live.length === 0 && live.data.paperPositions.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          Connect Zerodha or Angel One on the{' '}
+          Connect Angel One on the{' '}
           <Link href="/broker" className="underline">
             Broker accounts
           </Link>{' '}

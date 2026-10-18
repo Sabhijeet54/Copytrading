@@ -97,6 +97,9 @@ export class TradingService implements OnModuleInit {
     if (err.brokerCode === 'RATE_LIMIT' || /access rate|rate limit|too many|static ip|not allowed from this ip/i.test(msg)) return false;
     if (err.brokerCode && /^(AG8001|AG8002|AG8003|AB1010|AB8050|AB8051)$/i.test(err.brokerCode)) return true; // Angel
     if (err.brokerCode === 'TokenException') return true; // Zerodha
+    if (err.brokerCode === 'DH-901') return true; // Dhan: invalid / expired access token
+    if (err.brokerCode && /^-(8|15|16|17)$/.test(err.brokerCode)) return true; // Fyers token errors
+    if (err.brokerCode === 'UDAPI100050') return true; // Upstox invalid token
     return /invalid token|token expired|invalid jwt|invalid session|session expired|incorrect `api_key` or `access_token`/i.test(msg);
   }
 

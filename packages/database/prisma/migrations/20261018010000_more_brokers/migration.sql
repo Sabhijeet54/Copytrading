@@ -1,0 +1,5 @@
+-- Dhan, Fyers, Kotak Neo and 5paisa as client brokers
+ALTER TYPE "BrokerName" ADD VALUE IF NOT EXISTS 'DHAN';
+ALTER TYPE "BrokerName" ADD VALUE IF NOT EXISTS 'FYERS';
+ALTER TYPE "BrokerName" ADD VALUE IF NOT EXISTS 'KOTAK_NEO';
+ALTER TYPE "BrokerName" ADD VALUE IF NOT EXISTS 'FIVE_PAISA';

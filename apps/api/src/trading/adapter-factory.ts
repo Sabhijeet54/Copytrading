@@ -4,6 +4,11 @@ import type { ApiConfig } from '../config/config.module';
 import { AngelOneAdapter, ANGEL_API_ROOT } from './angel.adapter';
 import type { BrokerAdapter } from './broker-adapter';
 import { KITE_API_ROOT, ZerodhaAdapter } from './zerodha.adapter';
+import { UPSTOX_API_ROOT, UpstoxAdapter } from './upstox.adapter';
+import { DHAN_API_ROOT, DhanAdapter } from './dhan.adapter';
+import { FYERS_API_ROOT, FyersAdapter } from './fyers.adapter';
+import { KOTAK_LOGIN_ROOT, KotakNeoAdapter } from './kotak.adapter';
+import { FIVEPAISA_API_ROOT, FivePaisaAdapter } from './fivepaisa.adapter';
 
 /**
  * Broker adapter registry. To add a broker (Upstox / Dhan / Fyers):
@@ -19,6 +24,8 @@ export interface AccountOverrides {
   proxyUrl?: string;
   /** Public IP Angel expects in X-ClientPublicIP (the proxy's IP). */
   publicIp?: string;
+  /** Whole decrypted session extra (broker-specific ids: Dhan client id, Kotak sid / base URL, …). */
+  extra?: Record<string, string | undefined>;
 }
 
 export interface AdapterFactory {
@@ -31,7 +38,7 @@ export interface AdapterFactory {
 /** Reads overrides from a decrypted credential `extra` blob. */
 export function overridesFrom(extra: Record<string, string | undefined> | null | undefined): AccountOverrides {
   if (!extra) return {};
-  return { apiKey: extra.apiKey || undefined, proxyUrl: extra.proxyUrl || undefined, publicIp: extra.publicIp || undefined };
+  return { apiKey: extra.apiKey || undefined, proxyUrl: extra.proxyUrl || undefined, publicIp: extra.publicIp || undefined, extra };
 }
 
 export const ADAPTERS: Partial<Record<BrokerName, AdapterFactory>> = {
@@ -61,6 +68,42 @@ export const ADAPTERS: Partial<Record<BrokerName, AdapterFactory>> = {
         token,
         { dataOnly: a.mode === 'DATA_ONLY' },
       );
+    },
+  },
+  UPSTOX: {
+    origin: UPSTOX_API_ROOT,
+    // Upstox only needs the Bearer token; orders go out through the client's own static-IP proxy.
+    create: (_c, token, a, o) => new UpstoxAdapter(token, o?.proxyUrl, { dataOnly: a.mode === 'DATA_ONLY' }),
+  },
+  DHAN: {
+    origin: DHAN_API_ROOT,
+    create: (_c, token, a, o) => {
+      const clientId = o?.extra?.clientId;
+      if (!clientId) throw new BrokerApiError('Dhan session has no client ID — please reconnect.');
+      return new DhanAdapter(clientId, token, o?.proxyUrl, { dataOnly: a.mode === 'DATA_ONLY' });
+    },
+  },
+  FYERS: {
+    origin: FYERS_API_ROOT,
+    create: (_c, token, a, o) => {
+      if (!o?.apiKey) throw new BrokerApiError('Fyers session has no App ID — please reconnect.');
+      return new FyersAdapter(o.apiKey, token, o.proxyUrl, { dataOnly: a.mode === 'DATA_ONLY' });
+    },
+  },
+  KOTAK_NEO: {
+    origin: KOTAK_LOGIN_ROOT,
+    create: (_c, token, a, o) => {
+      const e = o?.extra ?? {};
+      if (!e.sid || !e.baseUrl || !o?.apiKey) throw new BrokerApiError('Kotak Neo session is incomplete — please reconnect.');
+      return new KotakNeoAdapter({ token, sid: e.sid, serverId: e.serverId ?? '', baseUrl: e.baseUrl, consumerKey: o.apiKey }, o.proxyUrl, { dataOnly: a.mode === 'DATA_ONLY' });
+    },
+  },
+  FIVE_PAISA: {
+    origin: FIVEPAISA_API_ROOT,
+    create: (_c, token, a, o) => {
+      const e = o?.extra ?? {};
+      if (!o?.apiKey || !e.clientCode) throw new BrokerApiError('5paisa session is incomplete — please reconnect.');
+      return new FivePaisaAdapter({ token, userKey: o.apiKey, clientCode: e.clientCode }, o.proxyUrl, { dataOnly: a.mode === 'DATA_ONLY' });
     },
   },
 };

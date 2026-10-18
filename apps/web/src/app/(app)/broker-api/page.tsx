@@ -14,15 +14,6 @@ import { formatDateTime } from '@/lib/format';
 import { useMyBrokerAccounts } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
-const LABELS: Record<string, string> = {
-  clientCode: 'Client Code',
-  apiKey: 'API Key',
-  apiSecret: 'API Secret',
-  pin: 'PIN',
-  totpSecret: 'TOTP secret',
-  proxyHost: 'Static IP',
-  proxyPort: 'Port',
-};
 
 function copy(text: string) {
   void navigator.clipboard?.writeText(text).then(
@@ -90,109 +81,255 @@ function F({
   );
 }
 
-function SetupSteps({ broker, cfg }: { broker: BrokerSlug; cfg?: BrokerApiConfigView }) {
-  const angel = broker === 'angel-one';
+type FieldKey = 'clientCode' | 'apiKey' | 'apiSecret' | 'pin' | 'totpSecret' | 'mobile' | 'userId';
+interface FieldMeta {
+  key: FieldKey;
+  label: string;
+  required?: boolean;
+  secret?: boolean;
+  numeric?: boolean;
+  hint?: string;
+}
+interface BrokerMeta {
+  slug: BrokerSlug;
+  broker: BrokerApiConfigView['broker'];
+  name: string;
+  fields: FieldMeta[];
+  /** Setup steps (after "buy a static IP"); `ip` and the redirect URL are filled in. */
+  steps: (ip: string, redirect: React.ReactNode) => React.ReactNode[];
+  /** Server-side login every trading morning. */
+  autoLogin?: string;
+  /** Optional pasted access token on Connect. */
+  token?: string;
+  /** Connect opens the broker's login page (unless a token is pasted). */
+  browserLogin?: boolean;
+  daily: string;
+}
+
+const PROXY_LABELS: Record<string, string> = { proxyHost: 'Static IP', proxyPort: 'Port' };
+
+const BROKERS: BrokerMeta[] = [
+  {
+    slug: 'angel-one',
+    broker: 'ANGEL_ONE',
+    name: 'Angel One',
+    fields: [
+      { key: 'clientCode', label: 'Client Code', required: true },
+      { key: 'apiKey', label: 'API Key', required: true, secret: true },
+      { key: 'pin', label: 'PIN', required: true, secret: true, numeric: true },
+      { key: 'totpSecret', label: 'TOTP secret (QR code key)', required: true, secret: true, hint: 'The key under the QR code when enabling TOTP (or the otpauth:// link)' },
+    ],
+    steps: (ip, redirect) => [
+      <>Open <strong>smartapi.angelone.in</strong> → My Apps → <strong>Create App</strong>. Set <strong>Primary static IP</strong> = <code>{ip}</code>.</>,
+      <>Redirect URL: {redirect}</>,
+      <>Copy the app&apos;s <strong>API Key</strong>. In the Angel One app enable <strong>TOTP</strong> and copy the secret key shown under the QR code.</>,
+    ],
+    autoLogin: 'Auto-login every trading morning (around 8:45 AM IST) with my PIN + TOTP, so I don’t have to connect daily.',
+    daily: 'With auto-login ON we reconnect you each trading morning; if it fails, press Connect Broker before 9:15 AM.',
+  },
+  {
+    slug: 'dhan',
+    broker: 'DHAN',
+    name: 'Dhan',
+    fields: [
+      { key: 'clientCode', label: 'Dhan Client ID', required: true, hint: 'web.dhan.co → My Profile' },
+      { key: 'pin', label: 'Dhan PIN (6 digits)', required: true, secret: true, numeric: true },
+      { key: 'totpSecret', label: 'TOTP secret', required: true, secret: true, hint: 'web.dhan.co → My Profile → Setup TOTP — copy the key under the QR code' },
+    ],
+    steps: (ip) => [
+      <>Log in at <strong>web.dhan.co</strong> → My Profile → <strong>Access DhanHQ APIs</strong>. Add static IP <code>{ip}</code> as the <strong>Primary IP</strong>.</>,
+      <>In My Profile enable <strong>TOTP</strong> and copy the secret key shown under the QR code.</>,
+      <>Optional: generate a 24-hour <strong>Access Token</strong> there and paste it below to connect without PIN / TOTP.</>,
+    ],
+    autoLogin: 'Auto-login every trading morning with my Dhan PIN + TOTP (new 24-hour token daily).',
+    token: 'Access Token (optional)',
+    daily: 'Dhan tokens last 24 hours. With auto-login ON we generate a new one each morning; otherwise press Connect Broker before 9:15 AM.',
+  },
+  {
+    slug: 'fyers',
+    broker: 'FYERS',
+    name: 'Fyers',
+    fields: [
+      { key: 'clientCode', label: 'Fyers Client ID (optional)' },
+      { key: 'apiKey', label: 'App ID', required: true, secret: true, hint: 'Looks like XC4XXXXM-100' },
+      { key: 'apiSecret', label: 'Secret ID', required: true, secret: true },
+      { key: 'pin', label: 'Fyers PIN (optional)', secret: true, numeric: true, hint: 'Lets us refresh your session each morning without the login page (refresh token, valid ~15 days)' },
+    ],
+    steps: (ip, redirect) => [
+      <>Open <strong>myapi.fyers.in</strong> → Dashboard → <strong>Create App</strong>. Add static IP <code>{ip}</code>.</>,
+      <>Redirect URL: {redirect}</>,
+      <>Copy the <strong>App ID</strong> and <strong>Secret ID</strong>.</>,
+    ],
+    autoLogin: 'Refresh my Fyers session every trading morning with my PIN (after one Connect Broker login).',
+    browserLogin: true,
+    daily: 'Fyers sessions end at 6:30 AM. With PIN + auto-refresh ON we renew it each morning; the login page is needed again about every 15 days.',
+  },
+  {
+    slug: 'kotak-neo',
+    broker: 'KOTAK_NEO',
+    name: 'Kotak Neo',
+    fields: [
+      { key: 'clientCode', label: 'UCC (client code)', required: true, hint: 'Neo app → Profile' },
+      { key: 'mobile', label: 'Registered mobile number', required: true, secret: true, hint: 'e.g. +919876543210' },
+      { key: 'apiKey', label: 'Consumer Key (Trade API token)', required: true, secret: true, hint: 'Neo app → More → Trade API → Create application → copy the token' },
+      { key: 'pin', label: 'MPIN', required: true, secret: true, numeric: true },
+      { key: 'totpSecret', label: 'TOTP secret', required: true, secret: true, hint: 'Trade API dashboard → TOTP Registration — copy the key under the QR code' },
+    ],
+    steps: (ip) => [
+      <>In the <strong>Kotak Neo</strong> app: More → <strong>Trade API</strong> → create an application and copy its token (Consumer Key). Register static IP <code>{ip}</code> there.</>,
+      <>On the same page do <strong>TOTP Registration</strong> and copy the secret key shown under the QR code.</>,
+    ],
+    autoLogin: 'Auto-login every trading morning with my MPIN + TOTP.',
+    daily: 'Kotak Neo sessions end daily. With auto-login ON we reconnect you each morning; otherwise press Connect Broker before 9:15 AM.',
+  },
+  {
+    slug: '5paisa',
+    broker: 'FIVE_PAISA',
+    name: '5paisa',
+    fields: [
+      { key: 'clientCode', label: 'Client Code', required: true },
+      { key: 'apiKey', label: 'User Key', required: true, secret: true },
+      { key: 'apiSecret', label: 'Encryption Key', required: true, secret: true },
+      { key: 'userId', label: 'User ID (API)', required: true, secret: true, hint: 'From xstream.5paisa.com → Dashboard (API keys)' },
+      { key: 'pin', label: 'PIN', required: true, secret: true, numeric: true },
+      { key: 'totpSecret', label: 'TOTP secret', required: true, secret: true },
+    ],
+    steps: (ip) => [
+      <>Open <strong>xstream.5paisa.com</strong> → Dashboard → create API keys. Whitelist static IP <code>{ip}</code>.</>,
+      <>Copy <strong>User Key</strong>, <strong>Encryption Key</strong> and <strong>User ID</strong>. Enable <strong>TOTP</strong> in the 5paisa app and copy its secret key.</>,
+    ],
+    autoLogin: 'Auto-login every trading morning with my PIN + TOTP.',
+    daily: '5paisa tokens expire at 11:59 PM. With auto-login ON we reconnect you each morning; otherwise press Connect Broker before 9:15 AM.',
+  },
+  {
+    slug: 'upstox',
+    broker: 'UPSTOX',
+    name: 'Upstox',
+    fields: [
+      { key: 'clientCode', label: 'Client Code (Upstox user ID, optional)' },
+      { key: 'apiKey', label: 'API Key', required: true, secret: true },
+      { key: 'apiSecret', label: 'API Secret', required: true, secret: true },
+    ],
+    steps: (ip, redirect) => [
+      <>Open <strong>account.upstox.com/developer/apps</strong> → <strong>New app</strong>. Add static IP <code>{ip}</code> to the app.</>,
+      <>Redirect URL: {redirect}</>,
+      <>Copy the app&apos;s <strong>API Key</strong> and <strong>API Secret</strong>. Optional: generate an <strong>Access Token</strong> and paste it below.</>,
+    ],
+    token: 'Access Token (optional)',
+    browserLogin: true,
+    daily: 'Upstox tokens expire every night (~3:30 AM) — press Connect Broker (or paste a new access token) every trading day before 9:15 AM.',
+  },
+  {
+    slug: 'zerodha',
+    broker: 'ZERODHA',
+    name: 'Zerodha',
+    fields: [
+      { key: 'clientCode', label: 'User ID (optional)' },
+      { key: 'apiKey', label: 'API Key', required: true, secret: true },
+      { key: 'apiSecret', label: 'API Secret', required: true, secret: true },
+    ],
+    steps: (ip, redirect) => [
+      <>Open <strong>developers.kite.trade</strong> → <strong>Create new app</strong>. Whitelist IP <code>{ip}</code>.</>,
+      <>Redirect URL: {redirect}</>,
+      <>Copy the app&apos;s <strong>API Key</strong> and <strong>API Secret</strong>.</>,
+    ],
+    browserLogin: true,
+    daily: 'Zerodha requires a browser login — press Connect Broker every trading day before 9:15 AM.',
+  },
+];
+const META = Object.fromEntries(BROKERS.map((b) => [b.slug, b])) as Record<BrokerSlug, BrokerMeta>;
+
+function SetupSteps({ meta, cfg }: { meta: BrokerMeta; cfg?: BrokerApiConfigView }) {
   const ip = cfg?.lastTest?.ip ?? cfg?.proxyHost ?? 'your static IP';
+  const redirect = (
+    <button type="button" className="inline-flex items-center gap-1 break-all font-mono text-primary hover:underline" onClick={() => copy(cfg?.redirectUrl ?? '')}>
+      {cfg?.redirectUrl} <Copy className="size-3.5 shrink-0" />
+    </button>
+  );
   return (
     <details className="rounded-lg border bg-muted/30 p-4 text-sm" open={!cfg?.complete}>
       <summary className="cursor-pointer font-medium">
-        <Info className="mr-1 inline size-4" /> Setup steps — {angel ? 'Angel One SmartAPI' : 'Zerodha Kite Connect'}
+        <Info className="mr-1 inline size-4" /> Setup steps — {meta.name}
       </summary>
       <ol className="mt-3 grid list-decimal gap-2 pl-5 text-muted-foreground">
         <li>Buy a dedicated <strong>India static IP proxy</strong> (HTTP proxy, 24×7). Note its IP, port, username and password.</li>
-        {angel ? (
-          <>
-            <li>
-              Open <strong>smartapi.angelone.in</strong> → My Apps → <strong>Create / Add App</strong>. Set <strong>Primary static IP</strong> = <code>{ip}</code>.
-            </li>
-            <li>
-              Redirect URL:{' '}
-              <button type="button" className="inline-flex items-center gap-1 font-mono text-primary hover:underline" onClick={() => copy(cfg?.redirectUrl ?? '')}>
-                {cfg?.redirectUrl} <Copy className="size-3.5" />
-              </button>
-            </li>
-            <li>Copy the app&apos;s <strong>API Key</strong>. In the Angel One app enable <strong>TOTP</strong> and copy the secret key shown under the QR code.</li>
-          </>
-        ) : (
-          <>
-            <li>
-              Open <strong>developers.kite.trade</strong> → <strong>Create new app</strong> (paid Kite Connect). Whitelist IP <code>{ip}</code>.
-            </li>
-            <li>
-              Redirect URL:{' '}
-              <button type="button" className="inline-flex items-center gap-1 font-mono text-primary hover:underline" onClick={() => copy(cfg?.redirectUrl ?? '')}>
-                {cfg?.redirectUrl} <Copy className="size-3.5" />
-              </button>
-            </li>
-            <li>Copy the app&apos;s <strong>API Key</strong> and <strong>API Secret</strong>.</li>
-          </>
-        )}
+        {meta.steps(ip, redirect).map((s, i) => (
+          <li key={i}>{s}</li>
+        ))}
         <li>Fill the form below → <strong>Save</strong> → <strong>Test proxy health</strong> → <strong>Connect Broker</strong>.</li>
       </ol>
     </details>
   );
 }
 
+const BLANK = { clientCode: '', apiKey: '', apiSecret: '', pin: '', totpSecret: '', mobile: '', userId: '', proxyHost: '', proxyPort: '', proxyUser: '', proxyPass: '' };
+type Form = typeof BLANK;
+
 function BrokerForm({ broker }: { broker: BrokerSlug }) {
-  const angel = broker === 'angel-one';
+  const meta = META[broker];
   const q = useBrokerApiConfig(broker);
   const { save, test, connect } = useBrokerApiMutations(broker);
   const accounts = useMyBrokerAccounts();
-  const account = accounts.data?.find((a) => a.broker === (angel ? 'ANGEL_ONE' : 'ZERODHA'));
+  const account = accounts.data?.find((a) => a.broker === meta.broker);
   const cfg = q.data;
-  const blank = { clientCode: '', apiKey: '', apiSecret: '', pin: '', totpSecret: '', proxyHost: '', proxyPort: '', proxyUser: '', proxyPass: '' };
-  const [f, setF] = useState(blank);
+  const [f, setF] = useState<Form>(BLANK);
   const [autoLogin, setAutoLogin] = useState(true);
   const [consent, setConsent] = useState(false);
+  const [accessToken, setAccessToken] = useState('');
 
   useEffect(() => {
     if (!cfg) return;
-    setF({ ...blank, clientCode: cfg.clientCode ?? '', proxyHost: cfg.proxyHost ?? '', proxyPort: cfg.proxyPort ? String(cfg.proxyPort) : '' });
+    setF({ ...BLANK, clientCode: cfg.clientCode ?? '', proxyHost: cfg.proxyHost ?? '', proxyPort: cfg.proxyPort ? String(cfg.proxyPort) : '' });
     setAutoLogin(cfg.autoLogin);
     setConsent(Boolean(cfg.consentAt));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfg?.clientCode, cfg?.proxyHost, cfg?.proxyPort, cfg?.autoLogin, cfg?.consentAt]);
 
-  const set = (k: keyof typeof f) => (v: string) => setF((p) => ({ ...p, [k]: v }));
-  const dirty = Object.entries(f).some(([k, v]) =>
+  const set = (k: keyof Form) => (v: string) => setF((p) => ({ ...p, [k]: v }));
+  const dirty = (Object.entries(f) as [keyof Form, string][]).some(([k, v]) =>
     k === 'clientCode' ? v !== (cfg?.clientCode ?? '') : k === 'proxyHost' ? v !== (cfg?.proxyHost ?? '') : k === 'proxyPort' ? v !== (cfg?.proxyPort ? String(cfg.proxyPort) : '') : v !== '',
   );
+  const labelOf = (k: string) => meta.fields.find((x) => x.key === k)?.label ?? PROXY_LABELS[k] ?? k;
 
   const doSave = () => {
     if (!consent) return toast.error('Please accept the consent to store your credentials');
     const body: SaveBrokerApiConfigInput = {
-      ...(angel ? { clientCode: f.clientCode, pin: f.pin, totpSecret: f.totpSecret } : { clientCode: f.clientCode, apiSecret: f.apiSecret }),
-      apiKey: f.apiKey,
+      clientCode: f.clientCode,
       proxyHost: f.proxyHost,
       proxyPort: f.proxyPort ? Number(f.proxyPort) : undefined,
       proxyUser: f.proxyUser,
       proxyPass: f.proxyPass,
-      autoLogin: angel ? autoLogin : undefined,
+      autoLogin: meta.autoLogin ? autoLogin : undefined,
       consent: true,
     };
+    for (const fld of meta.fields) if (fld.key !== 'clientCode') (body as Record<string, unknown>)[fld.key] = f[fld.key];
     save.mutate(body, {
       onSuccess: (v) => {
-        setF((p) => ({ ...p, apiKey: '', apiSecret: '', pin: '', totpSecret: '', proxyUser: '', proxyPass: '' }));
-        toast.success(v.complete ? 'Saved — now test proxy health and connect' : `Saved. Still missing: ${v.missing.map((m) => LABELS[m] ?? m).join(', ')}`);
+        setF((p) => ({ ...p, apiKey: '', apiSecret: '', pin: '', totpSecret: '', mobile: '', userId: '', proxyUser: '', proxyPass: '' }));
+        toast.success(v.complete ? 'Saved — now test proxy health and connect' : `Saved. Still missing: ${v.missing.map(labelOf).join(', ')}`);
       },
       onError: (e) => toast.error(e.message),
     });
   };
 
+  const pasted = Boolean(meta.token && accessToken.trim());
   const doConnect = () =>
-    connect.mutate(undefined, {
+    connect.mutate(pasted ? { accessToken: accessToken.trim() } : undefined, {
       onSuccess: (r) => {
         if (r.loginUrl) {
           window.location.href = r.loginUrl;
           return;
         }
-        toast.success(`${angel ? 'Angel One' : 'Zerodha'} connected through your static IP`);
+        setAccessToken('');
+        toast.success(`${meta.name} connected through your static IP`);
       },
       onError: (e) => toast.error(e.message),
     });
 
-  const missing = cfg?.missing.map((m) => LABELS[m] ?? m) ?? [];
-  const canConnect = Boolean(cfg?.complete && cfg.consentAt) && !dirty;
+  // A pasted token replaces PIN / TOTP (Dhan) or the API secret (Upstox).
+  const missingKeys = (cfg?.missing ?? []).filter((m) => !(pasted && (m === 'pin' || m === 'totpSecret' || m === 'apiSecret')));
+  const missing = missingKeys.map(labelOf);
+  const canConnect = Boolean(cfg?.consentAt) && missingKeys.length === 0 && Boolean(cfg) && !dirty;
   const connected = account?.status === 'CONNECTED' && account.tokenStatus === 'ACTIVE';
 
   return (
@@ -225,11 +362,11 @@ function BrokerForm({ broker }: { broker: BrokerSlug }) {
         </CardContent>
       </Card>
 
-      <SetupSteps broker={broker} cfg={cfg} />
+      <SetupSteps meta={meta} cfg={cfg} />
 
       <Card>
         <CardHeader>
-          <CardTitle>{angel ? 'Angel One API' : 'Zerodha API'}</CardTitle>
+          <CardTitle>{meta.name} API</CardTitle>
           <CardDescription>Your credentials are encrypted and never shown again — not even to the admin. Leave a saved field blank to keep it.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -241,25 +378,20 @@ function BrokerForm({ broker }: { broker: BrokerSlug }) {
             }}
           >
             <div className="grid gap-4 sm:grid-cols-2">
-              <F id={`${broker}-cc`} label={angel ? 'Client Code' : 'User ID (optional)'} required={angel} value={f.clientCode} onChange={set('clientCode')} />
-              <F id={`${broker}-key`} label="API Key" required secret saved={cfg?.saved.apiKey} value={f.apiKey} onChange={set('apiKey')} />
-              {angel ? (
-                <>
-                  <F id={`${broker}-pin`} label="PIN" required secret saved={cfg?.saved.pin} value={f.pin} onChange={set('pin')} inputMode="numeric" />
-                  <F
-                    id={`${broker}-totp`}
-                    label="TOTP secret (QR code key)"
-                    required
-                    secret
-                    saved={cfg?.saved.totpSecret}
-                    value={f.totpSecret}
-                    onChange={set('totpSecret')}
-                    hint="The key under the QR code when enabling TOTP (or the otpauth:// link)"
-                  />
-                </>
-              ) : (
-                <F id={`${broker}-secret`} label="API Secret" required secret saved={cfg?.saved.apiSecret} value={f.apiSecret} onChange={set('apiSecret')} />
-              )}
+              {meta.fields.map((fld) => (
+                <F
+                  key={fld.key}
+                  id={`${broker}-${fld.key}`}
+                  label={fld.label}
+                  required={fld.required}
+                  secret={fld.secret}
+                  saved={fld.key === 'clientCode' ? undefined : cfg?.saved[fld.key as keyof BrokerApiConfigView['saved']]}
+                  value={f[fld.key]}
+                  onChange={set(fld.key)}
+                  inputMode={fld.numeric ? 'numeric' : undefined}
+                  hint={fld.hint}
+                />
+              ))}
             </div>
 
             <div className="grid gap-4 sm:grid-cols-[2fr_1fr]">
@@ -271,11 +403,21 @@ function BrokerForm({ broker }: { broker: BrokerSlug }) {
               <F id={`${broker}-pp`} label="Proxy Password" secret saved={cfg?.saved.proxyPass} value={f.proxyPass} onChange={set('proxyPass')} />
             </div>
 
-            {angel ? (
+            {meta.token ? (
+              <F
+                id={`${broker}-token`}
+                label={meta.token}
+                secret
+                value={accessToken}
+                onChange={setAccessToken}
+                hint="Paste a token generated by the broker to connect directly. It is used once to connect and not kept in this form."
+              />
+            ) : null}
+            {meta.autoLogin ? (
               <label className="flex items-start gap-2 text-sm">
                 <input type="checkbox" className="mt-0.5 size-4" checked={autoLogin} onChange={(e) => setAutoLogin(e.target.checked)} />
                 <span>
-                  <strong>Auto-login every trading morning</strong> (around 8:45 AM IST) with my PIN + TOTP, so I don&apos;t have to connect daily.
+                  <strong>{meta.autoLogin}</strong>
                 </span>
               </label>
             ) : null}
@@ -318,8 +460,7 @@ function BrokerForm({ broker }: { broker: BrokerSlug }) {
               <div>
                 <p className="font-medium">Important</p>
                 <p className="text-muted-foreground">
-                  Broker sessions expire every day. {angel ? 'With auto-login ON we reconnect you each trading morning; if it fails, press Connect Broker before 9:15 AM.' : 'Zerodha requires a browser login — press Connect Broker every trading day before 9:15 AM.'}{' '}
-                  Orders are only accepted from the static IP registered with your broker.
+                  {meta.daily} Orders are only accepted from the static IP registered with your broker.
                 </p>
               </div>
             </div>
@@ -338,9 +479,11 @@ function BrokerForm({ broker }: { broker: BrokerSlug }) {
                     ? `Missing: ${missing.join(', ')}`
                     : !cfg?.consentAt
                       ? 'Accept the consent and save'
-                      : angel
-                        ? 'Connects instantly with PIN + TOTP'
-                        : 'Opens the Kite login page'}
+                      : pasted
+                        ? 'Connects instantly with your access token'
+                        : meta.browserLogin
+                          ? `Opens the ${meta.name} login page`
+                          : 'Connects instantly (server-side login)'}
               </span>
             </div>
           </form>
@@ -352,25 +495,25 @@ function BrokerForm({ broker }: { broker: BrokerSlug }) {
 
 export default function BrokerApiPage() {
   const [tab, setTab] = useState<BrokerSlug>('angel-one');
+  // /broker-api?broker=upstox opens that tab (e.g. from "Reconnect" on the broker card).
+  useEffect(() => {
+    const b = new URLSearchParams(window.location.search).get('broker') as BrokerSlug | null;
+    if (b && META[b]) setTab(b);
+  }, []);
   return (
     <>
       <PageHeader title="Broker API" description="Connect your own broker API app through your static IP — required for live copy trading." />
-      <div className="mb-4 inline-flex overflow-hidden rounded-lg border" role="tablist" aria-label="Broker">
-        {(
-          [
-            ['angel-one', 'Angel One'],
-            ['zerodha', 'Zerodha'],
-          ] as const
-        ).map(([v, l]) => (
+      <div className="mb-4 flex flex-wrap gap-1 rounded-lg border p-1" role="tablist" aria-label="Broker">
+        {BROKERS.map((b) => (
           <button
-            key={v}
+            key={b.slug}
             type="button"
             role="tab"
-            aria-selected={tab === v}
-            onClick={() => setTab(v)}
-            className={cn('px-5 py-2 text-sm font-medium transition-colors', tab === v ? 'bg-primary text-primary-foreground' : 'hover:bg-muted')}
+            aria-selected={tab === b.slug}
+            onClick={() => setTab(b.slug)}
+            className={cn('rounded-md px-4 py-1.5 text-sm font-medium transition-colors', tab === b.slug ? 'bg-primary text-primary-foreground' : 'hover:bg-muted')}
           >
-            {l}
+            {b.name}
           </button>
         ))}
       </div>

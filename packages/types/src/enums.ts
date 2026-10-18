@@ -20,6 +20,11 @@ export type UserStatus = (typeof UserStatus)[keyof typeof UserStatus];
 export const BrokerName = {
   ZERODHA: 'ZERODHA',
   ANGEL_ONE: 'ANGEL_ONE',
+  UPSTOX: 'UPSTOX',
+  DHAN: 'DHAN',
+  FYERS: 'FYERS',
+  KOTAK_NEO: 'KOTAK_NEO',
+  FIVE_PAISA: 'FIVE_PAISA',
   MOCK: 'MOCK',
 } as const;
 export type BrokerName = (typeof BrokerName)[keyof typeof BrokerName];
