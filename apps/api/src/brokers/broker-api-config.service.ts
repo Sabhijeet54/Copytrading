@@ -176,6 +176,12 @@ export class BrokerApiConfigService implements OnApplicationBootstrap, OnModuleD
 
   /** Saves the form. Empty secret fields keep what is already stored (so the client never has to re-type them). */
   async save(userId: string, broker: BrokerName, dto: SaveBrokerApiConfigInput): Promise<BrokerApiConfigView> {
+    // Accept "151.245.182.35:443" (IP with port in one box, as other platforms show it) — split it.
+    const hp = dto.proxyHost?.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '').match(/^(.+):(\d{1,5})$/);
+    if (hp) {
+      dto.proxyHost = hp[1];
+      dto.proxyPort ??= Number(hp[2]);
+    }
     if (dto.proxyHost && !IPV4.test(dto.proxyHost) && !HOST.test(dto.proxyHost)) throw new BadRequestException('Static IP / host is not valid');
     if (dto.totpSecret) {
       try {

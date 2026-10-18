@@ -395,7 +395,7 @@ function BrokerForm({ broker }: { broker: BrokerSlug }) {
             </div>
 
             <div className="grid gap-4 sm:grid-cols-[2fr_1fr]">
-              <F id={`${broker}-host`} label="Static IP" required value={f.proxyHost} onChange={set('proxyHost')} hint="Proxy IP or host, e.g. 103.25.10.20" />
+              <F id={`${broker}-host`} label="Static IP" required value={f.proxyHost} onChange={set('proxyHost')} hint="Proxy IP, e.g. 151.245.182.35 — or paste 151.245.182.35:443 and the port is filled for you" />
               <F id={`${broker}-port`} label="Port" required value={f.proxyPort} onChange={set('proxyPort')} inputMode="numeric" type="text" />
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
