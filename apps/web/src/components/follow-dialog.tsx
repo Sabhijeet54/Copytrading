@@ -72,7 +72,7 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
           if (isNew)
             toggle.mutate(
               { id: r.id, action: 'start' },
-              { onError: (e) => toast.warning(`Connected, copying not started: ${e.message}. Press Start in My strategies.`) },
+              { onError: (e) => toast.warning(`Connected, auto trading not started: ${e.message}. Press Start in My strategies.`) },
             );
           toastResized(r.resized);
           if (!isNew) toast.info('Trade book & P&L now shown at the new lot size (website only).');
@@ -88,7 +88,7 @@ export function FollowDialog({ s, onClose }: { s: StrategyWithSub | null; onClos
       <DialogContent className="max-w-sm">
         <DialogHeader>
           <DialogTitle>{s?.subscription ? s?.name : `Connect ${s?.name ?? ''}`}</DialogTitle>
-          <DialogDescription>How many lots to copy for every master trade. Copying starts only when you press Start.</DialogDescription>
+          <DialogDescription>How many lots to trade for every strategy trade. Auto trading starts only when you press Start.</DialogDescription>
         </DialogHeader>
         {accounts.data && accounts.data.length === 0 ? (
           <p className="text-sm">

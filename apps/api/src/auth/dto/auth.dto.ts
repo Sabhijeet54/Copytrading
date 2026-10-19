@@ -28,9 +28,10 @@ export class RegisterDto {
   @Matches(/^\+?[0-9]{10,15}$/, { message: 'Enter a valid mobile number' })
   mobile?: string;
 
-  /** Self-registration is only for masters and followers; admins are provisioned separately. */
-  @IsIn(['MASTER', 'FOLLOWER'])
-  role!: 'MASTER' | 'FOLLOWER';
+  /** Self-registration is for clients only; masters and admins are created by the admin. */
+  @IsOptional()
+  @IsIn(['FOLLOWER'], { message: 'Only client accounts can be created here' })
+  role?: 'FOLLOWER';
 }
 
 export class LoginDto {
@@ -42,6 +43,11 @@ export class LoginDto {
   @IsNotEmpty()
   @MaxLength(128)
   password!: string;
+
+  /** client = /login (clients only) · staff = /master-login (masters and admins). Defaults to client. */
+  @IsOptional()
+  @IsIn(['client', 'staff'])
+  portal?: 'client' | 'staff';
 }
 
 export class VerifyEmailDto {

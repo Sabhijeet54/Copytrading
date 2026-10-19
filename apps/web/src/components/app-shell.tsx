@@ -86,9 +86,7 @@ const MENUS: Record<Role, NavSection[]> = {
         { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
         { href: '/portfolio/marketplace', label: 'Marketplace', icon: Store },
         { href: '/portfolio', label: 'My strategies', icon: Copy, exact: true },
-        { href: '/portfolio/positions', label: 'Positions', icon: Briefcase },
-        { href: '/portfolio/holdings', label: 'Holdings', icon: Wallet },
-        { href: '/portfolio/orders', label: "Today's orders", icon: ListOrdered },
+        { href: '/portfolio/positions', label: 'Portfolio', icon: Briefcase, also: ['/portfolio/holdings', '/portfolio/orders'] },
       ],
     },
     {
@@ -219,7 +217,7 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
         </span>
         {!mini ? (
           <span className="flex flex-col leading-tight">
-            <span className="text-base font-semibold tracking-tight text-foreground">CopyTrade</span>
+            <span className="text-base font-semibold tracking-tight text-foreground">AlgoMirror</span>
             <span className="text-[10px] font-medium uppercase tracking-wider text-sidebar-muted">{workspaceLabel}</span>
           </span>
         ) : null}
@@ -285,7 +283,7 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
           title="Sign out"
           className={cn('mt-2 h-7 w-full justify-start px-2 text-sidebar-foreground hover:bg-white hover:text-sidebar-active', mini && 'mt-0 justify-center px-0')}
           disabled={logout.isPending}
-          onClick={() => logout.mutate(undefined, { onSettled: () => router.replace('/login') })}
+          onClick={() => logout.mutate(undefined, { onSettled: () => router.replace(user.role === 'FOLLOWER' ? '/login' : '/master-login') })}
         >
           <LogOut /> {!mini ? 'Sign out' : null}
         </Button>

@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckCircle2, LineChart, Users } from 'lucide-react';
+import { CheckCircle2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
@@ -10,17 +10,13 @@ import { Label } from '@/components/ui/label';
 import { useRegister } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
-const ROLES = [
-  { value: 'FOLLOWER', title: 'Follower', body: 'Copy a master’s trades into my broker account', icon: Users },
-  { value: 'MASTER', title: 'Master trader', body: 'Let followers copy the trades I place', icon: LineChart },
-] as const;
 
 const PASSWORD_RULE = /^(?=.*[A-Za-z])(?=.*\d).{10,128}$/;
 
 export default function RegisterPage() {
   const router = useRouter();
   const register = useRegister();
-  const [form, setForm] = useState({ name: '', email: '', mobile: '', password: '', role: 'FOLLOWER' as 'FOLLOWER' | 'MASTER' });
+  const [form, setForm] = useState({ name: '', email: '', mobile: '', password: '', role: 'FOLLOWER' as const });
   const [verifyEmailSent, setVerifyEmailSent] = useState(false);
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -58,32 +54,8 @@ export default function RegisterPage() {
   return (
     <>
       <h1 className="text-2xl font-semibold tracking-tight">Create your account</h1>
-      <p className="mb-8 mt-1 text-sm text-muted-foreground">Connecting a broker and starting copy trading come later — and only when you choose.</p>
+      <p className="mb-8 mt-1 text-sm text-muted-foreground">Connecting a broker and starting auto trading come later — and only when you choose.</p>
       <form onSubmit={onSubmit} className="grid gap-4" noValidate>
-        <fieldset className="grid grid-cols-2 gap-2">
-          <legend className="sr-only">Account type</legend>
-          {ROLES.map((r) => (
-            <label
-              key={r.value}
-              className={cn(
-                'cursor-pointer rounded-lg border p-3 text-sm transition-colors hover:bg-accent',
-                form.role === r.value && 'border-primary bg-accent ring-1 ring-primary',
-              )}
-            >
-              <input
-                type="radio"
-                name="role"
-                value={r.value}
-                checked={form.role === r.value}
-                onChange={() => setForm((f) => ({ ...f, role: r.value }))}
-                className="sr-only"
-              />
-              <r.icon className="mb-2 size-4 text-primary" />
-              <span className="block font-medium">{r.title}</span>
-              <span className="mt-0.5 block text-xs text-muted-foreground">{r.body}</span>
-            </label>
-          ))}
-        </fieldset>
         <div className="grid gap-2">
           <Label htmlFor="name">Full name</Label>
           <Input id="name" autoComplete="name" required value={form.name} onChange={set('name')} />

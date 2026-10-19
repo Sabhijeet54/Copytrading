@@ -5,8 +5,8 @@ import { Providers } from '@/components/providers';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: { default: 'CopyTrade', template: '%s · CopyTrade' },
-  description: 'Copy trading for Indian markets — follow a master trader through your own broker account.',
+  title: { default: 'AlgoMirror', template: '%s · AlgoMirror' },
+  description: 'Strategy auto-trading for Indian markets — expert strategies run in your own broker account.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

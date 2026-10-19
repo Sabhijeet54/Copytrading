@@ -18,10 +18,15 @@ export function TradeBookCard() {
       <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0">
         <div>
           <CardTitle>Trade book</CardTitle>
-          <CardDescription>Every trade today with the strategy (algo) it came from — shown at your lot size from My strategies (website only, nothing sent to your demat).</CardDescription>
+          <CardDescription>Every trade today with the strategy it came from, at your lot size. Trades your broker rejected are also listed (tagged) so you can follow the strategy.</CardDescription>
         </div>
         <p className="text-sm">
           Total P&amp;L: <strong className="text-base"><Pnl value={q.data?.totalPnl ?? 0} /></strong>
+          {q.data?.rows.some((r) => r.rejected) ? (
+            <span className="block text-right text-xs text-muted-foreground">
+              Broker-rejected trades (not in total): <Pnl value={q.data.rejectedPnl ?? 0} />
+            </span>
+          ) : null}
         </p>
       </CardHeader>
       <CardContent className="overflow-x-auto">
@@ -50,7 +55,7 @@ export function TradeBookCard() {
               </TableRow>
             ) : (
               rows.map((r, i) => (
-                <TableRow key={`${r.id}-${i}`}>
+                <TableRow key={`${r.id}-${i}`} className={r.rejected ? 'opacity-70' : undefined}>
                   <TableCell className="text-muted-foreground">{i + 1}</TableCell>
                   <TableCell className="whitespace-nowrap font-semibold">{r.strategyName}</TableCell>
                   <TableCell className="whitespace-nowrap">
@@ -82,6 +87,11 @@ export function TradeBookCard() {
                     <span className={cn('rounded px-1.5 py-0.5 text-xs font-semibold', r.status === 'OPEN' ? 'bg-emerald-100 text-emerald-800' : 'bg-accent text-accent-foreground')}>
                       {r.status === 'OPEN' ? 'Open' : 'Closed'}
                     </span>
+                    {r.rejected ? (
+                      <span className="mt-1 block w-fit rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700" title={r.rejectReason ?? ''}>
+                        Rejected by broker
+                      </span>
+                    ) : null}
                   </TableCell>
                 </TableRow>
               ))

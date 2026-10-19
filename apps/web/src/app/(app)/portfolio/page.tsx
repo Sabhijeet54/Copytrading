@@ -21,7 +21,7 @@ export default function MyStrategiesPage() {
 
   return (
     <>
-      <PageHeader title="My strategies" description="Strategies you are connected to. Change the lot multiplier, Start / Stop copying, or Disconnect."
+      <PageHeader title="My strategies" description="Strategies you are connected to. Change the lot multiplier, Start / Stop auto trading, or Disconnect."
         actions={
           <Button asChild>
             <Link href="/portfolio/marketplace">Browse marketplace</Link>
@@ -40,7 +40,7 @@ export default function MyStrategiesPage() {
                 <TableHead>Master</TableHead>
                 <TableHead>Risk</TableHead>
                 <TableHead>Allocation</TableHead>
-                <TableHead>Copying</TableHead>
+                <TableHead>Auto trading</TableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -76,7 +76,7 @@ export default function MyStrategiesPage() {
                           className="text-destructive"
                           disabled={disconnect.isPending}
                           onClick={() => {
-                            if (!window.confirm(`Disconnect ${s.name}? Copying stops and its trades are removed from your screens. Open positions in your broker are not closed.`)) return;
+                            if (!window.confirm(`Disconnect ${s.name}? Auto trading stops and its trades are removed from your screens. Open positions in your broker are not closed.`)) return;
                             disconnect.mutate(s.id, { onSuccess: () => toast.success(`${s.name} disconnected`), onError: (e) => toast.error(e.message) });
                           }}
                         >

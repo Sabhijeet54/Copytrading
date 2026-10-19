@@ -10,7 +10,8 @@ const REFRESH_COOKIE = 'ctp_rt';
 export function proxy(request: NextRequest) {
   if (!request.cookies.has(REFRESH_COOKIE)) {
     const url = request.nextUrl.clone();
-    url.pathname = '/login';
+    const staffArea = /^\/(master|admin)(\/|$)/.test(request.nextUrl.pathname);
+    url.pathname = staffArea ? '/master-login' : '/login';
     url.search = `?next=${encodeURIComponent(request.nextUrl.pathname)}`;
     return NextResponse.redirect(url);
   }

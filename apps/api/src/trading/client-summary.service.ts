@@ -161,7 +161,7 @@ export class ClientSummaryService {
     let tbPnl: Map<string, number> | null = new Map<string, number>();
     try {
       const tb = await this.tradeBook(userId);
-      for (const r of tb.rows) tbPnl.set(r.followerId, (tbPnl.get(r.followerId) ?? 0) + r.pnl);
+      for (const r of tb.rows) if (!r.rejected) tbPnl.set(r.followerId, (tbPnl.get(r.followerId) ?? 0) + r.pnl);
     } catch (err) {
       this.logger.error(`tradeBook failed for ${userId}: ${(err as Error).stack ?? err}`);
       tbPnl = null;
@@ -325,9 +325,65 @@ export class ClientSummaryService {
         ltp,
         status: openQty ? ('OPEN' as const) : ('CLOSED' as const),
         pnl: Math.round(pnl * 100) / 100,
+        rejected: false,
+        rejectReason: null as string | null,
       };
     });
-    out.reverse(); // newest first
-    return { totalPnl: Math.round(out.reduce((a, r) => a + r.pnl, 0) * 100) / 100, rows: out };
+
+    // Trades the broker REJECTED (never reached the demat) are still tracked here at the strategy's prices,
+    // so the client sees what the strategy did. They are tagged and kept out of the total P&L.
+    const rejectedOrders = await this.prisma.copyOrder.findMany({
+      where: {
+        followerUserId: userId,
+        createdAt: { gte: since },
+        isExit: false,
+        filledQuantity: 0,
+        status: { in: ['REJECTED', 'FAILED'] },
+        strategyFollowerId: { in: subs.map((x) => x.id) },
+      },
+      include: { masterTrade: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    for (const o of rejectedOrders) {
+      const mt = o.masterTrade;
+      if (!mt.signalStatus || mt.signalStatus === 'DELETED') continue;
+      const entry = Number(mt.averagePrice ?? mt.price ?? 0);
+      if (!entry) continue;
+      const qty = displayQty(subById2.get(o.strategyFollowerId), mt, o.quantity);
+      const masterQty = mt.filledQuantity > 0 ? mt.filledQuantity : mt.quantity;
+      const closedQty = mt.signalStatus === 'CLOSED' ? qty : Math.min(qty, Math.round((qty * mt.closedQuantity) / Math.max(1, masterQty)));
+      const openQty = qty - closedQty;
+      const exit = mt.exitPrice != null ? Number(mt.exitPrice) : null;
+      const dir = mt.side === 'BUY' ? 1 : -1;
+      if (openQty) this.feed.ensure(mt.exchange as never, mt.symbol);
+      const ltp = openQty ? (this.prices.get(instrumentKey(mt.exchange, mt.symbol)) ?? entry) : null;
+      const pnl = (exit != null && closedQty ? (exit - entry) * closedQty * dir : 0) + (ltp != null ? (ltp - entry) * openQty * dir : 0);
+      const lot = Math.max(1, Number((mt.rawPayload as { lotSize?: number } | null)?.lotSize) || 1);
+      out.push({
+        id: o.id,
+        followerId: o.strategyFollowerId,
+        strategyName: subName.get(o.strategyFollowerId) ?? '—',
+        exchange: mt.exchange,
+        symbol: mt.symbol,
+        productType: mt.productType,
+        side: mt.side,
+        quantity: qty,
+        lots: lot > 1 ? +(qty / lot).toFixed(2) : null,
+        openQuantity: openQty,
+        entryPrice: Math.round(entry * 100) / 100,
+        entryAt: (mt.eventTimestamp ?? o.createdAt).toISOString(),
+        carried: false,
+        exitPrice: exit == null || !closedQty ? null : Math.round(exit * 100) / 100,
+        exitAt: openQty ? null : (mt.exitedAt?.toISOString() ?? null),
+        ltp,
+        status: openQty ? ('OPEN' as const) : ('CLOSED' as const),
+        pnl: Math.round(pnl * 100) / 100,
+        rejected: true,
+        rejectReason: o.errorMessage ?? 'Rejected by broker',
+      });
+    }
+    out.sort((a, b) => (a.entryAt < b.entryAt ? 1 : a.entryAt > b.entryAt ? -1 : 0)); // newest first
+    const sum = (list: typeof out) => Math.round(list.reduce((a, r) => a + r.pnl, 0) * 100) / 100;
+    return { totalPnl: sum(out.filter((r) => !r.rejected)), rejectedPnl: sum(out.filter((r) => r.rejected)), rows: out };
   }
 }

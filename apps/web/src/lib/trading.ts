@@ -556,9 +556,16 @@ export interface TradeBookRow {
   ltp: number | null;
   status: 'OPEN' | 'CLOSED';
   pnl: number;
+  /** Broker rejected the order — tracked at the strategy's prices, not in the demat, not in the total. */
+  rejected?: boolean;
+  rejectReason?: string | null;
 }
 export const useTradeBook = () =>
-  useQuery({ queryKey: ['follow', 'trades'], queryFn: () => api<{ totalPnl: number; rows: TradeBookRow[] }>('/follow/trades'), refetchInterval: 5_000 });
+  useQuery({
+    queryKey: ['follow', 'trades'],
+    queryFn: () => api<{ totalPnl: number; rejectedPnl?: number; rows: TradeBookRow[] }>('/follow/trades'),
+    refetchInterval: 5_000,
+  });
 
 export interface ResizeResult {
   symbol: string;

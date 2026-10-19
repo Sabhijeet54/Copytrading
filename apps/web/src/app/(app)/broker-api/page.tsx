@@ -502,7 +502,7 @@ export default function BrokerApiPage() {
   }, []);
   return (
     <>
-      <PageHeader title="Broker API" description="Connect your own broker API app through your static IP — required for live copy trading." />
+      <PageHeader title="Broker API" description="Connect your own broker API app through your static IP — required for live auto trading." />
       <div className="mb-4 flex flex-wrap gap-1 rounded-lg border p-1" role="tablist" aria-label="Broker">
         {BROKERS.map((b) => (
           <button

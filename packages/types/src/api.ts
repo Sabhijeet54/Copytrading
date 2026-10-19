@@ -62,12 +62,15 @@ export interface RegisterRequest {
   password: string;
   name: string;
   mobile?: string;
-  role: Extract<Role, 'MASTER' | 'FOLLOWER'>;
+  /** Self-registration creates client accounts only. */
+  role?: 'FOLLOWER';
 }
 
 export interface LoginRequest {
   email: string;
   password: string;
+  /** client = /login (clients only) · staff = /master-login (masters and admins). */
+  portal?: 'client' | 'staff';
 }
 
 // ---------- Broker accounts (never contains credentials) ----------

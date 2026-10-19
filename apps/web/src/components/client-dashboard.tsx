@@ -103,7 +103,7 @@ function TradingModeSwitch({ b }: { b: NonNullable<Data['broker']> }) {
   const [confirmLive, setConfirmLive] = useState(false);
   const live = b.tradingMode === 'LIVE';
   const flip = () => {
-    if (live) setMode.mutate('PAPER', { onSuccess: () => toast.success('Switched to PAPER — copied trades are now simulated'), onError: (e) => toast.error(e.message) });
+    if (live) setMode.mutate('PAPER', { onSuccess: () => toast.success('Switched to PAPER — strategy trades are now simulated'), onError: (e) => toast.error(e.message) });
     else setConfirmLive(true);
   };
   return (
@@ -128,13 +128,13 @@ function TradingModeSwitch({ b }: { b: NonNullable<Data['broker']> }) {
         </button>
       </div>
       <p className="text-[11px] text-muted-foreground">
-        {live ? 'Copied trades go to your broker as real orders.' : 'Copied trades are simulated — no real orders.'}
+        {live ? 'Strategy trades go to your broker as real orders.' : 'Strategy trades are simulated — no real orders.'}
       </p>
       <Dialog open={confirmLive} onOpenChange={setConfirmLive}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Switch to LIVE trading?</DialogTitle>
-            <DialogDescription>From the next master trade, copied orders are placed as REAL orders in your broker account with real money.</DialogDescription>
+            <DialogDescription>From the next strategy trade, orders are placed as REAL orders in your broker account with real money.</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setConfirmLive(false)}>
@@ -240,13 +240,13 @@ export function ClientDashboard() {
               <span className="text-lg font-semibold tabular-nums">{d.subscriptions.total}</span>
             </div>
             <div className="flex items-center justify-between gap-2 tabular-nums">
-              <span className="flex items-center gap-1" title="Copying ON">
+              <span className="flex items-center gap-1" title="Auto trading ON">
                 <CheckCircle2 className="size-4 text-success" /> {d.subscriptions.on}
               </span>
               <span className="flex items-center gap-1" title="Paused">
                 <Pause className="size-4 text-warning" /> {d.subscriptions.paused}
               </span>
-              <span className="flex items-center gap-1" title="Copying OFF">
+              <span className="flex items-center gap-1" title="Auto trading OFF">
                 <Square className="size-4 text-destructive" /> {d.subscriptions.off}
               </span>
             </div>
@@ -272,7 +272,7 @@ export function ClientDashboard() {
                   ) : null}
                   till <span className="font-medium text-foreground">{fmtDay(d.licence.expiresAt)}</span>
                 </p>
-                {!d.licence.active ? <p className="text-xs text-destructive">Copy trading is stopped — contact your admin to renew.</p> : null}
+                {!d.licence.active ? <p className="text-xs text-destructive">Auto trading is stopped — contact your admin to renew.</p> : null}
               </>
             ) : (
               <>

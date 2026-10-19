@@ -50,7 +50,7 @@ export class AuthService {
           passwordHash,
           name: dto.name,
           mobile: dto.mobile ?? null,
-          role: dto.role,
+          role: 'FOLLOWER',
         },
       });
       await tx.emailVerificationToken.create({
@@ -100,6 +100,13 @@ export class AuthService {
     }
     if (this.config.REQUIRE_EMAIL_VERIFICATION && !user.emailVerifiedAt) {
       throw new ForbiddenException('Please verify your email address before signing in.');
+    }
+
+    // Separate login pages: clients on /login, masters and admins on /master-login.
+    const staff = user.role === 'MASTER' || user.role === 'ADMIN';
+    if (staff !== (dto.portal === 'staff')) {
+      await this.audit.log({ action: 'USER_LOGIN_FAILED', actorUserId: user.id, targetType: 'User', targetId: user.id, metadata: { reason: 'wrong_portal', portal: dto.portal ?? 'client' }, client });
+      throw new ForbiddenException(staff ? 'Masters and admins sign in on the master login page.' : 'Please sign in on the client login page.');
     }
 
     const tokens = await this.tokens.issueForNewSession(user, client);

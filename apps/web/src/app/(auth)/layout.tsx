@@ -7,7 +7,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         <div className="absolute inset-0 bg-[radial-gradient(50rem_35rem_at_85%_90%,var(--tile-mint),transparent_60%),radial-gradient(40rem_30rem_at_0%_0%,#8a5bff,transparent_70%)] opacity-60" />
         <div className="relative flex h-full flex-col justify-between p-10 text-white">
           <Link href="/" className="text-sm font-semibold text-white">
-            CopyTrade
+            AlgoMirror
           </Link>
           <div>
             <p className="max-w-md text-2xl font-semibold leading-snug text-white">

@@ -20,7 +20,7 @@ export function RequireAuth({ children }: { children: (user: AuthUser) => React.
 
   useEffect(() => {
     if (!isLoading && user === null) {
-      router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+      router.replace(`${/^\/(master|admin)(\/|$)/.test(pathname) ? '/master-login' : '/login'}?next=${encodeURIComponent(pathname)}`);
     }
   }, [isLoading, user, router, pathname]);
 

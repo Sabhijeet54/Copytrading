@@ -43,7 +43,9 @@ async function login(e: string, password = PASSWORD) {
   // Tests log in far more often than the auth rate limit allows; the limiter itself is tested separately.
   await clearRateLimits();
   const agent = request.agent(app.getHttpServer());
-  const res = await agent.post('/auth/login').set(H).send({ email: e, password });
+  let res = await agent.post('/auth/login').set(H).send({ email: e, password });
+  // Masters / admins use the staff login (/master-login).
+  if (res.status === 403) res = await agent.post('/auth/login').set(H).send({ email: e, password, portal: 'staff' });
   expect(res.status).toBe(200);
   return agent;
 }
@@ -113,7 +115,7 @@ describe('authentication', () => {
   });
 
   it('rejects duplicate emails (case-insensitive)', async () => {
-    const res = await request(app.getHttpServer()).post('/auth/register').set(H).send({ email: email('reg').toUpperCase(), password: PASSWORD, name: 'Dup', role: 'MASTER' });
+    const res = await request(app.getHttpServer()).post('/auth/register').set(H).send({ email: email('reg').toUpperCase(), password: PASSWORD, name: 'Dup' });
     expect(res.status).toBe(409);
   });
 

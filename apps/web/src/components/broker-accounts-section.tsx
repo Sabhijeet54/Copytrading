@@ -20,7 +20,7 @@ export function BrokerAccountsSection({ user }: { user: AuthUser }) {
         <CardDescription>
           {user.role === 'MASTER'
             ? 'Master account is used for LIVE MARKET DATA only (never places orders). Trades you take are mirrored to your clients.'
-            : 'Copied orders are placed in this broker account. Connecting a broker never starts copying by itself.'}
+            : 'Strategy orders are placed in this broker account. Connecting a broker never starts trading by itself.'}
         </CardDescription>
       </CardHeader>
       <CardContent>

@@ -16,7 +16,7 @@ const FEATURES = [
   {
     icon: Zap,
     title: 'Driven by real executions',
-    body: 'Copies are triggered by the master’s actual broker order executions — never by price movements alone.',
+    body: 'Client orders are triggered by the master’s actual broker order executions — never by price movements alone.',
   },
   {
     icon: Lock,
@@ -29,7 +29,7 @@ export default function Home() {
   return (
     <div className="min-h-dvh bg-background">
       <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
-        <span className="text-sm font-semibold tracking-tight">CopyTrade</span>
+        <span className="text-sm font-semibold tracking-tight">AlgoMirror</span>
         <nav className="flex items-center gap-2">
           <Button asChild variant="ghost" size="sm">
             <Link href="/login">Sign in</Link>
@@ -42,13 +42,13 @@ export default function Home() {
 
       <main className="mx-auto max-w-6xl px-6">
         <section className="py-20 sm:py-28">
-          <p className="text-sm font-medium text-primary">Copy trading for NSE · BSE · F&amp;O</p>
+          <p className="text-sm font-medium text-primary">Strategy auto-trading for NSE · BSE · F&amp;O</p>
           <h1 className="mt-3 max-w-3xl text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
             Mirror a master trader’s executions into your own broker account.
           </h1>
           <p className="mt-5 max-w-2xl text-lg text-muted-foreground text-pretty">
-            Connect your broker (Angel One, Zerodha, Upstox, Dhan, Fyers, Kotak Neo, 5paisa), choose a strategy, set your allocation and risk limits, and switch copying on
-            when you are ready. You stay in control — copying never starts on its own.
+            Connect your broker (Angel One, Zerodha, Upstox, Dhan, Fyers, Kotak Neo, 5paisa), choose a strategy, set your allocation and risk limits, and switch auto trading on
+            when you are ready. You stay in control — trading never starts on its own.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Button asChild size="lg">
