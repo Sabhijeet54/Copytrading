@@ -15,6 +15,9 @@ import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 
+/** Turn back on to show clients their licence (days left / expiry) on the dashboard. */
+const SHOW_CLIENT_LICENCE = false;
+
 /** Validated categorical palette (distinct in light and dark). */
 const COLORS = ['#6425FE', '#2BC9A0', '#F5B83D', '#4F8EF7', '#E8663D', '#8E8E99', '#9B6BD6', '#22B573'];
 
@@ -177,7 +180,7 @@ export function ClientDashboard() {
 
   return (
     <div className="mb-6 grid gap-4">
-      <div className="fox-tiles grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className={cn("fox-tiles grid gap-4 sm:grid-cols-2", SHOW_CLIENT_LICENCE ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Today&apos;s P&amp;L</CardTitle>
@@ -253,6 +256,8 @@ export function ClientDashboard() {
           </CardContent>
         </Card>
 
+        {/* Licence card hidden from clients for now (SHOW_CLIENT_LICENCE) — admin still manages licences. */}
+        {SHOW_CLIENT_LICENCE ? (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Licence</CardTitle>
@@ -282,6 +287,7 @@ export function ClientDashboard() {
             )}
           </CardContent>
         </Card>
+        ) : null}
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
