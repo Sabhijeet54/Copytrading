@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Inject, Module, NotFoundException, Param, Post, Put, Query, Req, Res } from '@nestjs/common';
+import { BadRequestException, Body, ForbiddenException, Controller, Get, HttpCode, HttpStatus, Inject, Module, NotFoundException, Param, Post, Put, Query, Req, Res } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { IsBoolean, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
@@ -110,6 +110,7 @@ export class BrokersController {
   @HttpCode(HttpStatus.OK)
   @Post('api-config/:broker/connect')
   async connectApiConfig(@CurrentUser() user: RequestUser, @Param('broker') broker: string, @Body() dto: ConnectApiConfigDto, @Req() req: Request) {
+    if (brokerFromSlug(broker) === 'ZERODHA' && user.role !== 'FOLLOWER') throw new ForbiddenException('Zerodha is available for clients only.');
     const r = await this.apiConfigs.connect(user.id, brokerFromSlug(broker), { accessToken: dto?.accessToken }, clientInfo(req));
     return r.account ? { account: toBrokerAccountView(r.account) } : { loginUrl: r.loginUrl };
   }
@@ -135,6 +136,7 @@ export class BrokersController {
 
   @Get('zerodha/connect')
   async zerodhaConnect(@CurrentUser() user: RequestUser): Promise<{ loginUrl: string }> {
+    if (user.role !== 'FOLLOWER') throw new ForbiddenException('Zerodha is available for clients only — masters and admins use Angel One.');
     const client = this.sessions.zerodha();
     const state = await this.sessions.createState(user.id, 'ZERODHA');
     return { loginUrl: client.loginUrl(state) };

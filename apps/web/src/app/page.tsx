@@ -6,7 +6,7 @@ const FEATURES = [
   {
     icon: GitBranch,
     title: 'Your broker, your account',
-    body: 'Masters keep trading in Zerodha or Angel One as usual. Followers connect their own broker account — funds never leave it.',
+    body: 'Masters keep trading in Angel One as usual. Followers connect their own broker account — funds never leave it.',
   },
   {
     icon: ShieldCheck,
@@ -47,7 +47,7 @@ export default function Home() {
             Mirror a master trader’s executions into your own broker account.
           </h1>
           <p className="mt-5 max-w-2xl text-lg text-muted-foreground text-pretty">
-            Connect Zerodha or Angel One, choose a strategy, set your allocation and risk limits, and switch copying on
+            Connect your broker (Angel One, Zerodha, Upstox, Dhan, Fyers, Kotak Neo, 5paisa), choose a strategy, set your allocation and risk limits, and switch copying on
             when you are ready. You stay in control — copying never starts on its own.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">

@@ -107,7 +107,7 @@ export class MarketFeedService implements OnApplicationBootstrap, OnModuleDestro
     };
   }
 
-  async setPreferredBroker(broker: 'ZERODHA' | 'ANGEL_ONE'): Promise<MarketFeedStatus> {
+  async setPreferredBroker(broker: 'ANGEL_ONE'): Promise<MarketFeedStatus> {
     await this.redis.set(PREFERRED_KEY, broker);
     this.stop('switching broker');
     await this.start();
@@ -152,9 +152,10 @@ export class MarketFeedService implements OnApplicationBootstrap, OnModuleDestro
   // ----------------------------------------------------------------- lifecycle
 
   private async pickAccount(): Promise<BrokerAccount | null> {
-    const preferred = (await this.redis.get(PREFERRED_KEY)) as 'ZERODHA' | 'ANGEL_ONE' | null;
+    // Master live data comes from Angel One only (Zerodha removed for the master).
+    const preferred = (await this.redis.get(PREFERRED_KEY)) as 'ANGEL_ONE' | null;
     const accounts = await this.prisma.brokerAccount.findMany({
-      where: { status: 'CONNECTED', mode: 'DATA_ONLY', broker: { in: ['ZERODHA', 'ANGEL_ONE'] }, OR: [{ tokenExpiresAt: null }, { tokenExpiresAt: { gt: new Date() } }] },
+      where: { status: 'CONNECTED', mode: 'DATA_ONLY', broker: 'ANGEL_ONE', OR: [{ tokenExpiresAt: null }, { tokenExpiresAt: { gt: new Date() } }] },
       orderBy: { lastConnectedAt: 'desc' },
     });
     return accounts.find((a) => a.broker === preferred) ?? accounts[0] ?? null;

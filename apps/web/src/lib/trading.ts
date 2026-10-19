@@ -297,7 +297,7 @@ export const useFeedStatus = (enabled = true) =>
 export function useFeedAction() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (a: { kind: 'restart' } | { kind: 'broker'; broker: 'ZERODHA' | 'ANGEL_ONE' } | { kind: 'subscribe' | 'unsubscribe'; instruments: string[] }) =>
+    mutationFn: (a: { kind: 'restart' } | { kind: 'broker'; broker: 'ANGEL_ONE' } | { kind: 'subscribe' | 'unsubscribe'; instruments: string[] }) =>
       a.kind === 'restart'
         ? api<MarketFeedStatus>('/market/feed/restart', { method: 'POST' })
         : a.kind === 'broker'

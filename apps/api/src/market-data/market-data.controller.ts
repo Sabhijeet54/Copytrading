@@ -9,7 +9,7 @@ export class FeedInstrumentsDto {
   @IsArray() @ArrayMaxSize(500) @IsString({ each: true }) @MaxLength(60, { each: true }) instruments!: string[];
 }
 export class FeedBrokerDto {
-  @IsIn(['ZERODHA', 'ANGEL_ONE']) broker!: 'ZERODHA' | 'ANGEL_ONE';
+  @IsIn(['ANGEL_ONE']) broker!: 'ANGEL_ONE';
 }
 
 /** Master live market data: feed status/control and cached LTPs (no broker quote calls). */
