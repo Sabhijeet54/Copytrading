@@ -116,8 +116,8 @@ export class TradingService implements OnModuleInit {
   }
 
   /** Funds, positions, holdings and today's orders for every connected real account of a user. */
-  async liveData(userId: string): Promise<LiveAccountData[]> {
-    const accounts = await this.prisma.brokerAccount.findMany({ where: { userId, broker: { not: 'MOCK' } }, orderBy: { createdAt: 'asc' } });
+  async liveData(userId: string, opts: { hideZerodha?: boolean } = {}): Promise<LiveAccountData[]> {
+    const accounts = await this.prisma.brokerAccount.findMany({ where: { userId, broker: { notIn: opts.hideZerodha ? ['MOCK', 'ZERODHA'] : ['MOCK'] } }, orderBy: { createdAt: 'asc' } });
     return Promise.all(
       accounts.map(async (a): Promise<LiveAccountData> => {
         const base = { accountId: a.id, broker: a.broker, brokerClientId: a.brokerClientId, isPaper: a.isPaper };

@@ -1,4 +1,4 @@
-import { CanActivate, ExecutionContext, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { CanActivate, ExecutionContext, Inject, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { PrismaClient } from '@ctp/database';
 import { ACCESS_COOKIE } from '../../auth/auth-cookies';
@@ -36,7 +36,7 @@ export class AuthGuard implements CanActivate {
 
     const session = await this.prisma.session.findUnique({
       where: { id: payload.sid },
-      select: { revokedAt: true, expiresAt: true, userId: true, user: { select: { id: true, email: true, role: true, status: true, parentUserId: true } } },
+      select: { revokedAt: true, expiresAt: true, userId: true, user: { select: { id: true, email: true, role: true, status: true, parentUserId: true, licenceExpiresAt: true } } },
     });
     if (!session || session.userId !== payload.sub || session.revokedAt || session.expiresAt.getTime() <= Date.now()) {
       throw new UnauthorizedException('Session expired');
@@ -53,6 +53,14 @@ export class AuthGuard implements CanActivate {
       const asMaster = path.startsWith('/master') || path.startsWith('/market');
       req.user = { id: asMaster ? u.parentUserId : u.id, email: u.email, role: 'MASTER', sessionId: payload.sid, actorId: u.id };
       return true;
+    }
+    // Expired licence: a client can still sign in and look, but can change nothing (no paper / live switch,
+    // no strategy connect, no broker connect / API save). Profile, password and logout stay allowed.
+    if (u.role === 'FOLLOWER' && u.licenceExpiresAt && u.licenceExpiresAt.getTime() <= Date.now() && req.method !== 'GET') {
+      const path = (req.originalUrl ?? req.url ?? '').split('?')[0]!.replace(/^\/api/, '');
+      if (!path.startsWith('/auth') && !path.startsWith('/users/me')) {
+        throw new ForbiddenException('Your licence has expired — contact your master to renew it.');
+      }
     }
     req.user = { id: u.id, email: u.email, role: u.role, sessionId: payload.sid };
     return true;

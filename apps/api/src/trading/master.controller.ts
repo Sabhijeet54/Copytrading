@@ -4,7 +4,7 @@ import type { Request } from 'express';
 import type Redis from 'ioredis';
 import type { PrismaClient, Strategy } from '@ctp/database';
 import { generateToken, hashPassword } from '@ctp/shared';
-import { AssignLicenceDto, MasterSubAdminDto, UpdateUserStatusDto } from '../admin/dto/admin.dto';
+import { AssignLicenceDto, MasterClientCreateDto, MasterSubAdminDto, UpdateUserStatusDto } from '../admin/dto/admin.dto';
 import { AssignStrategyDto } from './trading.dto';
 import { AuditService } from '../audit/audit.service';
 import { clientInfo } from '../common/client-info';
@@ -228,10 +228,10 @@ export class MasterController {
 
   /** The client must be (or have been) on one of my strategies. */
   private async myClient(user: RequestUser, userId: string) {
-    const link = await this.prisma.strategyFollower.findFirst({ where: { followerUserId: userId, strategy: { masterUserId: user.id } }, select: { id: true } });
-    if (!link) throw new ForbiddenException('This client is not on any of your strategies');
     const u = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!u || u.role !== 'FOLLOWER') throw new NotFoundException('Client not found');
+    const link = u.parentUserId === user.id || (await this.prisma.strategyFollower.findFirst({ where: { followerUserId: userId, strategy: { masterUserId: user.id } }, select: { id: true } }));
+    if (!link) throw new ForbiddenException('This client is not one of your clients');
     return u;
   }
 
@@ -258,6 +258,27 @@ export class MasterController {
     await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: user.actorId ?? user.id, targetType: 'User', targetId: userId, metadata: { licenceRevoked: true, byMaster: true }, client: clientInfo(req) });
     this.accountEvents.emit({ type: 'settings', brokerAccountId: '', userId });
     return { revoked: true };
+  }
+
+  /** Create a new client (logs in on the client login page). Optional licence right away. */
+  @Post('clients')
+  async createClient(@CurrentUser() user: RequestUser, @Body() dto: MasterClientCreateDto, @Req() req: Request) {
+    if (await this.prisma.user.findUnique({ where: { email: dto.email } })) throw new BadRequestException('A user with this email already exists');
+    const now = new Date();
+    const u = await this.prisma.user.create({
+      data: {
+        name: dto.name,
+        email: dto.email,
+        mobile: dto.mobile ?? null,
+        role: 'FOLLOWER',
+        parentUserId: user.id,
+        passwordHash: await hashPassword(dto.password),
+        emailVerifiedAt: now,
+        ...(dto.licenceDays ? { licenceDays: dto.licenceDays, licenceAssignedAt: now, licenceExpiresAt: new Date(now.getTime() + dto.licenceDays * 86_400_000) } : {}),
+      },
+    });
+    await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: user.actorId ?? user.id, targetType: 'User', targetId: u.id, metadata: { createdByMaster: true, licenceDays: dto.licenceDays ?? null }, client: clientInfo(req) });
+    return { id: u.id, name: u.name, email: u.email };
   }
 
   /** My strategies with this client's assignment (null = not assigned). */
@@ -347,11 +368,21 @@ export class MasterController {
       orderBy: { createdAt: 'asc' },
     });
     const byUser = new Map<string, typeof subs>();
-    for (const s of subs) if (!isRemoved(s)) byUser.set(s.followerUserId, [...(byUser.get(s.followerUserId) ?? []), s]);
+    // A client stays in my list even after all strategies are removed (so they can be re-assigned),
+    // and clients I created show up before any strategy is given to them.
+    for (const s of subs) byUser.set(s.followerUserId, [...(byUser.get(s.followerUserId) ?? []), s]);
+    const own = await this.prisma.user.findMany({ where: { parentUserId: user.id, role: 'FOLLOWER' }, select: { id: true } });
+    for (const o of own) if (!byUser.has(o.id)) byUser.set(o.id, []);
+    const ids = [...byUser.keys()];
+    const [users, accounts] = await Promise.all([
+      this.prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true, mobile: true, status: true, licenceExpiresAt: true, licenceDays: true } }),
+      this.prisma.brokerAccount.findMany({ where: { userId: { in: ids }, broker: { not: 'MOCK' }, mode: 'TRADING' }, orderBy: { createdAt: 'asc' } }),
+    ]);
+    const userById = new Map(users.map((u) => [u.id, u]));
     const out = await Promise.all(
       [...byUser.entries()].map(async ([userId, list]) => {
-        const f = list[0]!.follower;
-        const account = list.find((x) => x.brokerAccount)?.brokerAccount ?? null;
+        const f = userById.get(userId)!;
+        const account = list.find((x) => x.brokerAccount)?.brokerAccount ?? accounts.find((a) => a.userId === userId) ?? null;
         const day = await this.summary.today(userId, user.id);
         return {
           userId,
@@ -365,7 +396,7 @@ export class MasterController {
           broker: account ? { ...toBrokerAccountView(account), simulated: this.trading.isSimulated(account) } : null,
           todayPnl: day.todayPnl,
           todayTrades: day.strategies.reduce((a, x) => a + x.todayTrades, 0),
-          subscriptions: list.map((x) => ({ followerId: x.id, strategyId: x.strategyId, strategyName: x.strategy.name, copyStatus: x.copyStatus, allocation: allocationLabel(x) })),
+          subscriptions: list.filter((x) => !isRemoved(x)).map((x) => ({ followerId: x.id, strategyId: x.strategyId, strategyName: x.strategy.name, copyStatus: x.copyStatus, allocation: allocationLabel(x) })),
         };
       }),
     );
@@ -383,7 +414,9 @@ export class MasterController {
       include: { strategy: { select: { name: true } }, brokerAccount: true },
       orderBy: { createdAt: 'asc' },
     });
-    if (!subsAll.length) throw new ForbiddenException('This client does not follow any of your strategies');
+    if (!subsAll.length && !(await this.prisma.user.count({ where: { id: userId, parentUserId: user.id } }))) {
+      throw new ForbiddenException('This client does not follow any of your strategies');
+    }
     const range = q.range ?? 'today';
     const since =
       range === 'today' ? startOfTradingDayIST() : range === '7d' ? new Date(Date.now() - 7 * 86_400_000) : range === '30d' ? new Date(Date.now() - 30 * 86_400_000) : undefined;
@@ -621,9 +654,9 @@ export class MasterController {
   @Get('live')
   async live(@CurrentUser() user: RequestUser) {
     const [live, paper, accounts] = await Promise.all([
-      this.trading.liveData(user.id),
+      this.trading.liveData(user.id, { hideZerodha: true }),
       this.prisma.position.findMany({ where: { userId: user.id, isPaper: true, OR: [{ quantity: { not: 0 } }, { updatedAt: { gte: startOfTradingDayIST() } }] }, orderBy: { updatedAt: 'desc' } }),
-      this.prisma.brokerAccount.findMany({ where: { userId: user.id } }),
+      this.prisma.brokerAccount.findMany({ where: { userId: user.id, broker: { not: 'ZERODHA' } } }),
     ]);
     return {
       paperMode: this.trading.isSimulated({ broker: 'ZERODHA', isPaper: false }),

@@ -6,6 +6,7 @@ import {
   Logger,
   NotFoundException,
   ServiceUnavailableException,
+  ForbiddenException,
 } from '@nestjs/common';
 import type Redis from 'ioredis';
 import { Prisma } from '@ctp/database';
@@ -168,8 +169,11 @@ export class BrokerSessionService {
   }
 
   private async saveSessionOnce(userId: string, broker: BrokerName, s: SessionMaterial, client?: ClientInfo): Promise<BrokerAccount> {
-    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true, licenceExpiresAt: true } });
     if (!user) throw new NotFoundException('User not found');
+    if (user.role === 'FOLLOWER' && user.licenceExpiresAt && user.licenceExpiresAt.getTime() <= Date.now()) {
+      throw new ForbiddenException('Your licence has expired — contact your master to renew it before connecting a broker.');
+    }
     // Master accounts are market-data feeds only; they never place orders.
     const mode = user.role === 'MASTER' ? 'DATA_ONLY' : 'TRADING';
 

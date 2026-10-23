@@ -130,3 +130,7 @@ export class MasterSubAdminDto {
   @IsOptional() @Transform(trim) @Matches(/^[0-9+\-\s]{7,20}$/, { message: 'Invalid mobile number' }) mobile?: string;
   @IsString() @Matches(PASSWORD_RULE, { message: PASSWORD_MESSAGE }) password!: string;
 }
+
+export class MasterClientCreateDto extends MasterSubAdminDto {
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(3650) licenceDays?: number;
+}

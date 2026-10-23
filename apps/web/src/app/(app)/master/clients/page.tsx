@@ -1,6 +1,7 @@
 'use client';
 
-import { KeyRound, Layers, Search } from 'lucide-react';
+import { KeyRound, Layers, Search, UserPlus } from 'lucide-react';
+import { AddClientDialog } from '@/components/master-add-client';
 import { LicenceDialog, UserStrategiesDialog } from '@/components/admin-user-dialogs';
 import Link from 'next/link';
 import { useState } from 'react';
@@ -22,6 +23,7 @@ export default function MasterClientsPage() {
   const [search, setSearch] = useState('');
   const [lic, setLic] = useState<MasterClientRow | null>(null);
   const [strat, setStrat] = useState<MasterClientRow | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
   const rows = (q.data ?? []).filter((c) => {
     const t = search.trim().toLowerCase();
     return !t || c.name.toLowerCase().includes(t) || c.email.toLowerCase().includes(t) || (c.mobile ?? '').includes(t);
@@ -34,9 +36,14 @@ export default function MasterClientsPage() {
         title="Clients"
         description="Everyone who follows your strategies. Open a client to see all of their data."
         actions={
-          <span className="text-sm">
-            Today&apos;s P&amp;L (all clients): <strong><Pnl value={total} /></strong>
-          </span>
+          <div className="flex items-center gap-4">
+            <span className="text-sm">
+              Today&apos;s P&amp;L (all clients): <strong><Pnl value={total} /></strong>
+            </span>
+            <Button onClick={() => setAddOpen(true)}>
+              <UserPlus /> Create client
+            </Button>
+          </div>
         }
       />
       <Card>
@@ -63,7 +70,7 @@ export default function MasterClientsPage() {
                 {rows.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
-                      {q.isLoading ? 'Loading…' : q.error ? q.error.message : 'No clients yet — assign clients on the Strategies page.'}
+                      {q.isLoading ? 'Loading…' : q.error ? q.error.message : 'No clients yet — press “Create client”.'}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -136,6 +143,7 @@ export default function MasterClientsPage() {
         user={lic ? { id: lic.userId, name: lic.name, mobile: lic.mobile, licenceDays: lic.licenceDays ?? null, licenceExpiresAt: lic.licenceExpiresAt } : null}
         onClose={() => setLic(null)}
       />
+      <AddClientDialog open={addOpen} onOpenChange={setAddOpen} onCreated={(c) => setStrat({ userId: c.id, name: c.name, email: c.email } as MasterClientRow)} />
       <UserStrategiesDialog scope="master" user={strat ? { id: strat.userId, name: strat.name, email: strat.email } : null} onClose={() => setStrat(null)} />
     </>
   );

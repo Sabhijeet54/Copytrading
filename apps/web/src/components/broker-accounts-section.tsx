@@ -43,22 +43,22 @@ export function BrokerAccountsSection({ user }: { user: AuthUser }) {
             <p className="mt-2 text-muted-foreground">Log in with your broker below to connect it.</p>
           </div>
         )}
-        <div className="mt-4">
+        {user.role === 'FOLLOWER' ? (
+          <p className="mt-4 text-sm text-muted-foreground">
+            Connect or reconnect your broker from{' '}
+            <Link href="/broker-api" className="font-medium text-primary hover:underline">
+              Broker API
+            </Link>
+            .
+          </p>
+        ) : (
+          <div className="mt-4">
           <p className="mb-2 text-xs text-muted-foreground">
             Broker sessions expire daily — log in again each trading day.
-            {user.role === 'FOLLOWER' ? (
-              <>
-                {' '}
-                Dhan, Fyers, Kotak Neo, 5paisa and Upstox connect from{' '}
-                <Link href="/broker-api" className="font-medium text-primary hover:underline">
-                  Broker API
-                </Link>
-                .
-              </>
-            ) : null}
           </p>
-          <BrokerConnectButtons angelClientCode={angel?.brokerClientId ?? undefined} isMaster={user.role === 'MASTER'} hideZerodha={user.role !== 'FOLLOWER'} />
+          <BrokerConnectButtons angelClientCode={angel?.brokerClientId ?? undefined} isMaster={user.role === 'MASTER'} hideZerodha />
         </div>
+        )}
       </CardContent>
     </Card>
   );

@@ -176,7 +176,9 @@ export class FollowerController {
       this.prisma.strategyFollower.findMany({ where: { followerUserId: user.id } }),
     ]);
     const byStrategy = new Map(mine.filter((m) => !isRemoved(m)).map((m) => [m.strategyId, m]));
-    return rows.map((st) => {
+    // Only strategies given to me by the master / admin are listed (plus ones I disconnected myself, to reconnect).
+    const allowed = new Set(mine.filter((m) => !isRemoved(m) || m.stoppedByUserId === user.id).map((m) => m.strategyId));
+    return rows.filter((st) => allowed.has(st.id)).map((st) => {
       const sub = byStrategy.get(st.id);
       return { ...toStrategyView(st), connected: !!sub, subscription: sub ? toStrategyFollowerView(sub) : null, allocationLabel: sub ? allocationLabel(sub) : null };
     });
@@ -239,6 +241,9 @@ export class FollowerController {
     if (dto.allocationMode === 'CAPITAL_PERCENTAGE' && !dto.allocationPercent) throw new BadRequestException('Allocation % is required');
     if (dto.allocationMode === 'PROPORTIONAL' && !dto.allocationAmount) throw new BadRequestException('Capital amount is required');
     const existing = await this.prisma.strategyFollower.findUnique({ where: { strategyId_followerUserId: { strategyId: id, followerUserId: user.id } } });
+    if (!existing || (isRemoved(existing) && existing.stoppedByUserId !== user.id)) {
+      throw new ForbiddenException('This strategy is not assigned to you — ask your master to assign it.');
+    }
     // Connecting from the marketplace: a new (or previously disconnected) subscription takes a free seat.
     if ((!existing || isRemoved(existing)) && s.maxFollowers) {
       const taken = await this.prisma.strategyFollower.count({ where: { strategyId: id, NOT: { copyStatus: 'OFF', stoppedReason: REMOVED_REASON } } });

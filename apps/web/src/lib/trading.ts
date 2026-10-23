@@ -661,3 +661,11 @@ export function useSubAdminMutations() {
     setStatus: useMutation({ mutationFn: ({ id, status }: { id: string; status: 'ACTIVE' | 'DISABLED' }) => api(`/master/sub-admins/${id}/status`, { method: 'POST', body: { status } }), onSuccess: done }),
   };
 }
+
+export function useMasterCreateClient() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { name: string; email: string; mobile?: string; password: string; licenceDays?: number }) => api<{ id: string }>('/master/clients', { method: 'POST', body }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['master'] }),
+  });
+}

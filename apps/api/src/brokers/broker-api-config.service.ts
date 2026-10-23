@@ -571,7 +571,7 @@ export class BrokerApiConfigService implements OnApplicationBootstrap, OnModuleD
     const [h, m] = t.split(':').map(Number) as [number, number];
     if (wd === 0 || wd === 6 || mins < h * 60 + m || mins > 15 * 60 + 30 || this.autoLoginDay === day) return;
     this.autoLoginDay = day;
-    const rows = await this.prisma.brokerApiConfig.findMany({ where: { broker: { in: AUTO_LOGIN_BROKERS }, autoLogin: true, user: { status: 'ACTIVE' } } });
+    const rows = await this.prisma.brokerApiConfig.findMany({ where: { broker: { in: AUTO_LOGIN_BROKERS }, autoLogin: true, user: { status: 'ACTIVE', OR: [{ licenceExpiresAt: null }, { licenceExpiresAt: { gt: new Date() } }, { role: { not: 'FOLLOWER' } }] } } });
     const done: Record<string, number> = {};
     for (const r of rows) {
       if (this.missing(r, r.broker).length) continue;

@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { cn } from '@/lib/utils';
 
 /** Turn back on to show clients their licence (days left / expiry) on the dashboard. */
-const SHOW_CLIENT_LICENCE = false;
+const SHOW_CLIENT_LICENCE = true;
 
 /** Validated categorical palette (distinct in light and dark). */
 const COLORS = ['#6425FE', '#2BC9A0', '#F5B83D', '#4F8EF7', '#E8663D', '#8E8E99', '#9B6BD6', '#22B573'];
@@ -101,7 +101,7 @@ function Donut({ rows }: { rows: Data['strategies'] }) {
 const fmtDay = (iso: string) => new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }).format(new Date(iso));
 
 /** Paper ⇄ Live switch for the client's trading account (asks before going live). */
-function TradingModeSwitch({ b }: { b: NonNullable<Data['broker']> }) {
+function TradingModeSwitch({ b, locked = false }: { b: NonNullable<Data['broker']>; locked?: boolean }) {
   const setMode = useSetTradingMode();
   const [confirmLive, setConfirmLive] = useState(false);
   const live = b.tradingMode === 'LIVE';
@@ -119,7 +119,7 @@ function TradingModeSwitch({ b }: { b: NonNullable<Data['broker']> }) {
           aria-checked={live}
           aria-label="Live trading"
           onClick={flip}
-          disabled={setMode.isPending}
+          disabled={setMode.isPending || locked}
           title={live ? 'Switch to paper trading' : 'Switch to live trading'}
           className="flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-muted"
         >
@@ -180,6 +180,11 @@ export function ClientDashboard() {
 
   return (
     <div className="mb-6 grid gap-4">
+      {d.licence.active === false ? (
+        <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <strong>Your licence has expired.</strong> Auto trading (paper and live), strategy connect and broker connect are blocked. Contact your master to renew.
+        </div>
+      ) : null}
       <div className={cn("fox-tiles grid gap-4 sm:grid-cols-2", SHOW_CLIENT_LICENCE ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
         <Card>
           <CardHeader className="pb-2">
@@ -215,7 +220,7 @@ export function ClientDashboard() {
                   </span>
                   {d.broker.connected ? <Badge tone="ok">Connected</Badge> : <Badge tone="warn">{d.broker.status === 'EXPIRED' ? 'Expired' : 'Not connected'}</Badge>}
                 </div>
-                <TradingModeSwitch b={d.broker} />
+                <TradingModeSwitch b={d.broker} locked={d.licence.active === false} />
                 {!d.broker.connected ? (
                   <Button asChild size="sm" variant="outline">
                     <Link href="/broker">Connect broker</Link>
@@ -277,12 +282,12 @@ export function ClientDashboard() {
                   ) : null}
                   till <span className="font-medium text-foreground">{fmtDay(d.licence.expiresAt)}</span>
                 </p>
-                {!d.licence.active ? <p className="text-xs text-destructive">Auto trading is stopped — contact your admin to renew.</p> : null}
+                {!d.licence.active ? <p className="text-xs text-destructive">Auto trading is stopped — contact your master to renew.</p> : null}
               </>
             ) : (
               <>
                 <p className="font-medium">No licence assigned</p>
-                <p className="text-xs text-muted-foreground">Contact your admin to activate your subscription.</p>
+                <p className="text-xs text-muted-foreground">Contact your master to activate your subscription.</p>
               </>
             )}
           </CardContent>

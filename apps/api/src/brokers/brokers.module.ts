@@ -117,7 +117,7 @@ export class BrokersController {
 
   @Get('accounts')
   async myAccounts(@CurrentUser() user: RequestUser): Promise<BrokerAccountView[]> {
-    const accounts = await this.prisma.brokerAccount.findMany({ where: { userId: user.id }, orderBy: { createdAt: 'asc' } });
+    const accounts = await this.prisma.brokerAccount.findMany({ where: { userId: user.id, ...(user.role !== 'FOLLOWER' ? { broker: { notIn: ['ZERODHA'] } } : {}) }, orderBy: { createdAt: 'asc' } });
     return accounts.map(toBrokerAccountView);
   }
 
