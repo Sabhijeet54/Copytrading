@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { Prisma, PrismaClient } from '@ctp/database';
 import type Redis from 'ioredis';
 import { readFileSync } from 'node:fs';
@@ -190,7 +190,15 @@ export class AdminService {
 
   // ------------------------------------------------------------------ add / edit / licence
 
+  /** A sub-admin manages masters and clients only — never admins / sub-admins. */
+  private guardStaff(actor: RequestUser, ...roles: (string | undefined | null)[]): void {
+    if (actor.role === 'SUB_ADMIN' && roles.some((r) => r === 'ADMIN' || r === 'SUB_ADMIN')) {
+      throw new ForbiddenException('A sub-admin cannot create or change admin / sub-admin accounts');
+    }
+  }
+
   async createUser(admin: RequestUser, dto: CreateUserDto, client: ClientInfo): Promise<AdminUserDetail> {
+    this.guardStaff(admin, dto.role);
     const exists = await this.prisma.user.findUnique({ where: { email: dto.email } });
     if (exists) throw new BadRequestException('A user with this email already exists');
     const now = new Date();
@@ -212,6 +220,7 @@ export class AdminService {
   async updateUser(admin: RequestUser, id: string, dto: UpdateUserDto, client: ClientInfo): Promise<AdminUserDetail> {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found');
+    this.guardStaff(admin, user.role, dto.role);
     if (dto.role && dto.role !== user.role) {
       if (id === admin.id) throw new BadRequestException('You cannot change your own role');
       if (user.role === 'MASTER' && (await this.prisma.strategy.count({ where: { masterUserId: id, status: { in: ['ACTIVE', 'PAUSED'] } } }))) {
@@ -230,6 +239,7 @@ export class AdminService {
   async assignLicence(admin: RequestUser, id: string, dto: AssignLicenceDto, client: ClientInfo): Promise<AdminUserDetail> {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found');
+    this.guardStaff(admin, user.role);
     const now = new Date();
     const running = user.licenceExpiresAt && user.licenceExpiresAt > now;
     const base = dto.extend !== false && running ? user.licenceExpiresAt! : now;
@@ -246,6 +256,7 @@ export class AdminService {
   async revokeLicence(admin: RequestUser, id: string, client: ClientInfo): Promise<AdminUserDetail> {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found');
+    this.guardStaff(admin, user.role);
     await this.prisma.user.update({ where: { id }, data: { licenceExpiresAt: new Date() } });
     await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: admin.id, targetType: 'User', targetId: id, metadata: { licenceRevoked: true }, client });
     this.accountEvents.emit({ type: 'settings', brokerAccountId: '', userId: id });
@@ -279,6 +290,7 @@ export class AdminService {
     if (id === admin.id) throw new BadRequestException('You cannot change the status of your own account');
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found');
+    this.guardStaff(admin, user.role);
 
     if (dto.status === 'DISABLED') {
       if (!dto.reason) throw new BadRequestException('A reason is required to disable a user');
@@ -436,6 +448,78 @@ export class AdminService {
         metadata: { reason, initiatedBy: 'admin' },
         client,
       });
+      return s;
+    });
+    this.accountEvents.emit({ type: 'settings', brokerAccountId: '', userId: '' });
+    return toStrategyView(updated);
+  }
+
+  private async requireMaster(masterUserId: string) {
+    const m = await this.prisma.user.findUnique({ where: { id: masterUserId }, select: { id: true, role: true, status: true } });
+    if (!m || m.role !== 'MASTER') throw new BadRequestException('Select a valid master');
+    if (m.status !== 'ACTIVE') throw new BadRequestException('This master account is not active');
+    return m;
+  }
+
+  async createStrategyForMaster(
+    admin: RequestUser,
+    masterUserId: string,
+    dto: { name: string; description?: string; riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH'; allowedExchanges?: string[]; allowedInstruments?: string[]; maxFollowers?: number; masterCapital: number; maxOrderValue?: number; maxQuantityPerOrder?: number },
+    client: ClientInfo,
+  ): Promise<StrategyView> {
+    await this.requireMaster(masterUserId);
+    const s = await this.prisma.strategy.create({
+      data: {
+        masterUserId,
+        name: dto.name,
+        description: dto.description,
+        riskLevel: dto.riskLevel ?? 'MEDIUM',
+        allowedExchanges: (dto.allowedExchanges ?? []) as never,
+        allowedInstruments: (dto.allowedInstruments ?? []).map((x) => x.toUpperCase()),
+        maxFollowers: dto.maxFollowers,
+        masterCapital: dto.masterCapital,
+        maxOrderValue: dto.maxOrderValue,
+        maxQuantityPerOrder: dto.maxQuantityPerOrder,
+      },
+      include: { master: { select: { name: true } }, _count: { select: { followers: true } } },
+    });
+    await this.audit.log({ action: 'STRATEGY_CREATED', actorUserId: admin.id, targetType: 'Strategy', targetId: s.id, metadata: { masterUserId, initiatedBy: 'admin' }, client });
+    return toStrategyView(s);
+  }
+
+  async reassignStrategy(admin: RequestUser, id: string, masterUserId: string, client: ClientInfo): Promise<StrategyView> {
+    const strategy = await this.prisma.strategy.findUnique({ where: { id } });
+    if (!strategy) throw new NotFoundException('Strategy not found');
+    if (strategy.status === 'ARCHIVED') throw new BadRequestException('This strategy was removed');
+    if (strategy.masterUserId === masterUserId) throw new BadRequestException('Strategy already belongs to this master');
+    await this.requireMaster(masterUserId);
+    const open = await this.prisma.masterTrade.count({ where: { strategyId: id, signalStatus: 'OPEN' } });
+    if (open) throw new BadRequestException('Close the open trades of this strategy before moving it to another master');
+    const s = await this.prisma.strategy.update({
+      where: { id },
+      data: { masterUserId },
+      include: { master: { select: { name: true } }, _count: { select: { followers: true } } },
+    });
+    await this.audit.log({ action: 'STRATEGY_UPDATED', actorUserId: admin.id, targetType: 'Strategy', targetId: id, metadata: { fromMaster: strategy.masterUserId, toMaster: masterUserId }, client });
+    this.accountEvents.emit({ type: 'settings', brokerAccountId: '', userId: '' });
+    return toStrategyView(s);
+  }
+
+  async removeStrategy(admin: RequestUser, id: string, reason: string, client: ClientInfo): Promise<StrategyView> {
+    const strategy = await this.prisma.strategy.findUnique({ where: { id } });
+    if (!strategy) throw new NotFoundException('Strategy not found');
+    if (strategy.status === 'ARCHIVED') throw new BadRequestException('Strategy is already removed');
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.strategyFollower.updateMany({
+        where: { strategyId: id, copyStatus: { not: 'OFF' } },
+        data: { copyStatus: 'OFF', stoppedAt: new Date(), stoppedReason: `Strategy removed by admin: ${reason}`, stoppedByUserId: admin.id },
+      });
+      const s = await tx.strategy.update({
+        where: { id },
+        data: { status: 'ARCHIVED' },
+        include: { master: { select: { name: true } }, _count: { select: { followers: true } } },
+      });
+      await this.audit.logTx(tx, { action: 'STRATEGY_STOPPED', actorUserId: admin.id, targetType: 'Strategy', targetId: id, metadata: { reason, removed: true, initiatedBy: 'admin' }, client });
       return s;
     });
     this.accountEvents.emit({ type: 'settings', brokerAccountId: '', userId: '' });

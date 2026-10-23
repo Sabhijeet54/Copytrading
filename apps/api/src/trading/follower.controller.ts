@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpCode, HttpStatus, Inject, NotFoundException, Param, Post, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpCode, HttpStatus, Inject, NotFoundException, Param, Post, Query, Req } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import type { PrismaClient } from '@ctp/database';
@@ -14,6 +14,7 @@ import { MarketFeedService } from '../market-data/market-feed.service';
 import { PriceCacheService } from '../market-data/price-cache.service';
 import { startOfTradingDayIST } from '../admin/admin.service';
 import { overlayLivePrices, paperPositionView } from './price-overlay';
+import { SignalService } from './signal.service';
 import { TradingService } from './trading.service';
 import { RiskService } from './risk.service';
 import { AccountEvents } from '../realtime/account-events';
@@ -32,6 +33,7 @@ export class FollowerController {
     private readonly feed: MarketFeedService,
     private readonly summary: ClientSummaryService,
     private readonly resizer: PositionResizeService,
+    private readonly signals: SignalService,
   ) {}
 
   /**
@@ -89,10 +91,77 @@ export class FollowerController {
   async tradingMode(@CurrentUser() user: RequestUser, @Body() dto: TradingModeDto, @Req() req: Request) {
     const accounts = await this.prisma.brokerAccount.findMany({ where: { userId: user.id, broker: { not: 'MOCK' }, mode: 'TRADING' } });
     if (!accounts.length) throw new BadRequestException('Connect your broker first.');
+    // PAPER → LIVE: paper trades opened before the switch are closed now (at LTP). Otherwise the master's later
+    // exit would go to the live broker (where nothing is held) and the old paper trade would never be cut.
+    let paperClosed = 0;
+    if (dto.mode === 'LIVE') {
+      for (const a of accounts) {
+        if (!this.trading.isSimulated(a)) continue;
+        const r = await this.risk.squareOffAccount(a, { intradayOnly: false }).catch(() => ({ orders: 0 }));
+        paperClosed += r.orders;
+      }
+    }
     await this.prisma.brokerAccount.updateMany({ where: { id: { in: accounts.map((a) => a.id) } }, data: { isPaper: dto.mode === 'PAPER' } });
-    await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: user.id, targetType: 'BrokerAccount', targetId: accounts[0]!.id, metadata: { tradingMode: dto.mode }, client: clientInfo(req) });
+    await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: user.id, targetType: 'BrokerAccount', targetId: accounts[0]!.id, metadata: { tradingMode: dto.mode, paperClosed }, client: clientInfo(req) });
     for (const a of accounts) this.accountEvents.emit({ type: 'settings', brokerAccountId: a.id, userId: user.id });
-    return { mode: dto.mode };
+    return { mode: dto.mode, paperClosed };
+  }
+
+  /** Marketplace: last 7 days of trades of one live strategy (lot size / quantity shown as the master traded). */
+  @Get('strategies/:id/history')
+  async strategyHistory(@Param('id') id: string) {
+    const st = await this.prisma.strategy.findUnique({ where: { id }, select: { status: true } });
+    if (!st || (st.status !== 'ACTIVE' && st.status !== 'PAUSED')) throw new NotFoundException('Strategy not found');
+    const rows = await this.signals.list(null, { status: 'all', from: new Date(Date.now() - 7 * 86_400_000), strategyIds: [id] });
+    return rows.map(({ copyStatusCounts: _c, masterName: _m, ...r }) => r);
+  }
+
+  /** Activity log: every change on my account, who made it (me / admin / master / system), and my logins. */
+  @Get('activity')
+  async activity(@CurrentUser() user: RequestUser, @Query('page') pageQ?: string) {
+    const page = Math.max(1, Number(pageQ) || 1);
+    const pageSize = 50;
+    const [subs, accounts, apiCfgs] = await Promise.all([
+      this.prisma.strategyFollower.findMany({ where: { followerUserId: user.id }, select: { id: true, strategy: { select: { name: true } } } }),
+      this.prisma.brokerAccount.findMany({ where: { userId: user.id }, select: { id: true, broker: true } }),
+      this.prisma.brokerApiConfig.findMany({ where: { userId: user.id }, select: { id: true, broker: true } }),
+    ]);
+    const where = {
+      action: { notIn: ['COPY_ORDER_CREATED', 'COPY_ORDER_SUBMITTED', 'COPY_ORDER_FILLED', 'MASTER_TRADE_DETECTED'] as never[] },
+      OR: [
+        { actorUserId: user.id },
+        { targetType: 'User', targetId: user.id },
+        ...(subs.length ? [{ targetType: 'StrategyFollower', targetId: { in: subs.map((x) => x.id) } }] : []),
+        ...(accounts.length ? [{ targetType: 'BrokerAccount', targetId: { in: accounts.map((x) => x.id) } }] : []),
+        ...(apiCfgs.length ? [{ targetType: 'BrokerApiConfig', targetId: { in: apiCfgs.map((x) => x.id) } }] : []),
+      ],
+    };
+    const [total, rows] = await Promise.all([
+      this.prisma.auditLog.count({ where }),
+      this.prisma.auditLog.findMany({ where, include: { actor: { select: { id: true, name: true, role: true } } }, orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }),
+    ]);
+    const subName = new Map(subs.map((x) => [x.id, x.strategy.name]));
+    const accName = new Map([...accounts.map((x) => [x.id, x.broker] as const), ...apiCfgs.map((x) => [x.id, x.broker] as const)]);
+    return {
+      total,
+      page,
+      pageSize,
+      items: rows.map((r) => {
+        const by = !r.actor ? 'System' : r.actor.id === user.id ? 'You' : r.actor.role === 'MASTER' ? `Master · ${r.actor.name}` : r.actor.role === 'FOLLOWER' ? r.actor.name : `Admin · ${r.actor.name}`;
+        const side = !r.actor ? 'SYSTEM' : r.actor.id === user.id ? 'YOU' : r.actor.role === 'MASTER' ? 'MASTER' : r.actor.role === 'FOLLOWER' ? 'CLIENT' : 'ADMIN';
+        return {
+          id: r.id,
+          at: r.createdAt.toISOString(),
+          action: r.action,
+          by,
+          side,
+          on: r.targetType === 'StrategyFollower' ? (subName.get(r.targetId ?? '') ?? 'Strategy') : r.targetType === 'BrokerAccount' || r.targetType === 'BrokerApiConfig' ? (accName.get(r.targetId ?? '') ?? 'Broker') : null,
+          metadata: (r.metadata ?? null) as Record<string, unknown> | null,
+          ip: r.ip,
+          userAgent: r.userAgent,
+        };
+      }),
+    };
   }
 
   /** Marketplace: every live strategy, with my connection (if any). */

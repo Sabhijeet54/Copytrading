@@ -128,7 +128,7 @@ export default function AdminUserDetailPage() {
           </CardContent>
         </Card>
 
-        {u.role !== 'ADMIN' ? (
+        {u.role !== 'ADMIN' && u.role !== 'SUB_ADMIN' ? (
           <Card className="lg:col-span-2">
             <CardHeader>
               <CardTitle>{u.role === 'MASTER' ? 'Strategies' : 'Copy trading'}</CardTitle>

@@ -9,6 +9,7 @@ import { DHAN_API_ROOT, DhanAdapter } from './dhan.adapter';
 import { FYERS_API_ROOT, FyersAdapter } from './fyers.adapter';
 import { KOTAK_LOGIN_ROOT, KotakNeoAdapter } from './kotak.adapter';
 import { FIVEPAISA_API_ROOT, FivePaisaAdapter } from './fivepaisa.adapter';
+import { ALICEBLUE_API_ROOT, AliceBlueAdapter } from './aliceblue.adapter';
 
 /**
  * Broker adapter registry. To add a broker (Upstox / Dhan / Fyers):
@@ -104,6 +105,14 @@ export const ADAPTERS: Partial<Record<BrokerName, AdapterFactory>> = {
       const e = o?.extra ?? {};
       if (!o?.apiKey || !e.clientCode) throw new BrokerApiError('5paisa session is incomplete — please reconnect.');
       return new FivePaisaAdapter({ token, userKey: o.apiKey, clientCode: e.clientCode }, o.proxyUrl, { dataOnly: a.mode === 'DATA_ONLY' });
+    },
+  },
+  ALICE_BLUE: {
+    origin: ALICEBLUE_API_ROOT,
+    create: (_c, token, a, o) => {
+      const e = o?.extra ?? {};
+      if (!e.clientCode) throw new BrokerApiError('Alice Blue session is incomplete — please reconnect.');
+      return new AliceBlueAdapter(e.clientCode, token, o?.proxyUrl, { dataOnly: a.mode === 'DATA_ONLY' });
     },
   },
 };

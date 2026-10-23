@@ -22,12 +22,13 @@ import { StatCard } from '@/components/stat-card';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { formatDateTime, formatNumber } from '@/lib/format';
-import { useAdminAction, useAdminDashboard, useAdminSystemHealth } from '@/lib/queries';
+import { useAdminAction, useAdminDashboard, useAdminSystemHealth, useMe } from '@/lib/queries';
 import { useAdminLatency } from '@/lib/trading';
 import { MarketFeedPanel } from '@/components/market-feed-panel';
 
 export default function AdminOverviewPage() {
   const stats = useAdminDashboard();
+  const isFullAdmin = useMe().data?.role === 'ADMIN';
   const health = useAdminSystemHealth();
   const halt = useAdminAction<{ reason: string }>('POST', () => '/admin/copy-trading/halt');
   const resume = useAdminAction<{ reason: string }>('POST', () => '/admin/copy-trading/resume');
@@ -45,7 +46,7 @@ export default function AdminOverviewPage() {
         title="Admin overview"
         description="Platform activity for today (IST). Refreshes automatically."
         actions={
-          <>
+          !isFullAdmin ? undefined : <>
             {copyHalt ? (
               <Button variant="outline" onClick={() => setDialog('resume')}>
                 <PlayCircle /> Resume copy trading

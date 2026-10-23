@@ -6,6 +6,7 @@
 
 export const Role = {
   ADMIN: 'ADMIN',
+  SUB_ADMIN: 'SUB_ADMIN',
   MASTER: 'MASTER',
   FOLLOWER: 'FOLLOWER',
 } as const;
@@ -25,6 +26,7 @@ export const BrokerName = {
   FYERS: 'FYERS',
   KOTAK_NEO: 'KOTAK_NEO',
   FIVE_PAISA: 'FIVE_PAISA',
+  ALICE_BLUE: 'ALICE_BLUE',
   MOCK: 'MOCK',
 } as const;
 export type BrokerName = (typeof BrokerName)[keyof typeof BrokerName];

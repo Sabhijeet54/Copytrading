@@ -41,7 +41,7 @@ export default function AdminBrokersPage() {
       <Card className="overflow-hidden">
         <FilterBar onReset={list.reset} active={list.active}>
           <Field label="Broker">
-            <EnumSelect value={list.filters.broker} onChange={(v) => list.setFilter('broker', v)} options={Object.values(BrokerName)} labels={brokerLabel} />
+            <EnumSelect value={list.filters.broker} onChange={(v) => list.setFilter('broker', v)} options={Object.values(BrokerName).filter((b) => b !== 'ZERODHA')} labels={brokerLabel} />
           </Field>
           <Field label="Status">
             <EnumSelect value={list.filters.status} onChange={(v) => list.setFilter('status', v)} options={Object.values(BrokerAccountStatus)} />

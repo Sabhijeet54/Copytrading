@@ -10,13 +10,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { formatDateTime } from '@/lib/format';
-import { useAdminUserMutations } from '@/lib/queries';
+import { useAdminUserMutations, useMe } from '@/lib/queries';
 import { type UserStrategyRow, useAdminUserStrategies, useAdminUserStrategyMutations } from '@/lib/trading';
 import { cn } from '@/lib/utils';
 import { toastResized } from '@/lib/resize-toast';
 
-type RoleValue = 'ADMIN' | 'MASTER' | 'FOLLOWER';
-const ROLE_LABEL: Record<RoleValue, string> = { FOLLOWER: 'Client (follower)', MASTER: 'Master trader', ADMIN: 'Admin' };
+type RoleValue = 'ADMIN' | 'SUB_ADMIN' | 'MASTER' | 'FOLLOWER';
+const ROLE_LABEL: Record<RoleValue, string> = { FOLLOWER: 'Client (follower)', MASTER: 'Master trader', SUB_ADMIN: 'Sub-admin', ADMIN: 'Admin' };
 
 function F({ id, label, hint, children }: { id: string; label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -30,10 +30,15 @@ function F({ id, label, hint, children }: { id: string; label: string; hint?: st
 
 /** Licence plans offered everywhere (Add user + Assign licence). */
 export const LICENCE_PLANS = [
-  { value: '2', label: '2 Days (trial)' },
-  { value: '30', label: '30 Days' },
-  { value: '365', label: 'Admin key (365 days)' },
+  { value: '2', label: '2 Days' },
+  { value: '30', label: '1 Month' },
 ] as const;
+
+/** Roles the signed-in staff member may assign (a sub-admin manages masters & clients only). */
+function useAssignableRoles(): RoleValue[] {
+  const me = useMe().data;
+  return me?.role === 'ADMIN' ? ['FOLLOWER', 'MASTER', 'SUB_ADMIN', 'ADMIN'] : ['FOLLOWER', 'MASTER'];
+}
 
 function LicencePicker({ id, plan, custom, onPlan, onCustom, allowNone }: { id: string; plan: string; custom: string; onPlan: (v: string) => void; onCustom: (v: string) => void; allowNone?: boolean }) {
   return (
@@ -44,7 +49,7 @@ function LicencePicker({ id, plan, custom, onPlan, onCustom, allowNone }: { id: 
             {p.label}
           </option>
         ))}
-        <option value="custom">Custom days…</option>
+        <option value="custom">Custom period (days)…</option>
         {allowNone ? <option value="none">No licence</option> : null}
       </Select>
       {plan === 'custom' ? (
@@ -60,6 +65,7 @@ const planDays = (plan: string, custom: string) => (plan === 'none' ? undefined 
 
 export function AddUserDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (o: boolean) => void; onCreated?: (u: AdminUserDetail) => void }) {
   const { create } = useAdminUserMutations();
+  const roles = useAssignableRoles();
   const empty = { name: '', email: '', mobile: '', password: '', role: 'FOLLOWER' as RoleValue, plan: '2', custom: '' };
   const [f, setF] = useState(empty);
   useEffect(() => {
@@ -75,7 +81,7 @@ export function AddUserDialog({ open, onOpenChange, onCreated }: { open: boolean
         mobile: f.mobile.trim() || undefined,
         password: f.password,
         role: f.role,
-        licenceDays: f.role === 'FOLLOWER' ? planDays(f.plan, f.custom) : undefined,
+        licenceDays: f.role === 'FOLLOWER' || f.role === 'MASTER' ? planDays(f.plan, f.custom) : undefined,
       },
       {
         onSuccess: (u) => {
@@ -107,7 +113,7 @@ export function AddUserDialog({ open, onOpenChange, onCreated }: { open: boolean
             </F>
             <F id="au-role" label="User type">
               <Select id="au-role" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as RoleValue })}>
-                {(Object.keys(ROLE_LABEL) as RoleValue[]).map((r) => (
+                {roles.map((r) => (
                   <option key={r} value={r}>
                     {ROLE_LABEL[r]}
                   </option>
@@ -118,8 +124,8 @@ export function AddUserDialog({ open, onOpenChange, onCreated }: { open: boolean
           <F id="au-pass" label="Password" hint="At least 10 characters with a letter and a number">
             <Input id="au-pass" type="password" autoComplete="new-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required minLength={10} />
           </F>
-          {f.role === 'FOLLOWER' ? (
-            <F id="au-lic" label="Licence" hint="Copy trading stops automatically when the licence expires">
+          {f.role === 'FOLLOWER' || f.role === 'MASTER' ? (
+            <F id="au-lic" label="Licence key" hint={f.role === 'MASTER' ? 'Master cannot place trades after the licence expires' : 'Auto trading stops automatically when the licence expires'}>
               <LicencePicker id="au-lic" plan={f.plan} custom={f.custom} onPlan={(v) => setF({ ...f, plan: v })} onCustom={(v) => setF({ ...f, custom: v })} allowNone />
             </F>
           ) : null}
@@ -140,6 +146,8 @@ export function AddUserDialog({ open, onOpenChange, onCreated }: { open: boolean
 export function EditUserDialog({ user, onClose }: { user: AdminUserListItem | null; onClose: () => void }) {
   const { update } = useAdminUserMutations();
   const [f, setF] = useState({ name: '', mobile: '', role: 'FOLLOWER' as RoleValue });
+  const assignable = useAssignableRoles();
+  const roles = user && !assignable.includes(user.role as RoleValue) ? [...assignable, user.role as RoleValue] : assignable;
   useEffect(() => {
     if (user) setF({ name: user.name, mobile: user.mobile ?? '', role: user.role as RoleValue });
   }, [user]);
@@ -167,7 +175,7 @@ export function EditUserDialog({ user, onClose }: { user: AdminUserListItem | nu
           </F>
           <F id="eu-role" label="User type" hint="Role change is blocked while the user has active strategies / copy trading">
             <Select id="eu-role" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as RoleValue })}>
-              {(Object.keys(ROLE_LABEL) as RoleValue[]).map((r) => (
+              {roles.map((r) => (
                 <option key={r} value={r}>
                   {ROLE_LABEL[r]}
                 </option>
@@ -195,8 +203,8 @@ export function LicenceDialog({ user, onClose }: { user: AdminUserListItem | nul
   const [extend, setExtend] = useState(true);
   useEffect(() => {
     if (user) {
-      setPlan(user.licenceDays === 2 ? '2' : user.licenceDays === 365 ? '365' : '30');
-      setCustom('');
+      if (user.licenceDays === 2 || user.licenceDays === 30) setPlan(String(user.licenceDays)); else { setPlan('custom'); setCustom(String(user.licenceDays ?? 30)); }
+      if (user.licenceDays === 2 || user.licenceDays === 30) setCustom('');
       setExtend(true);
     }
   }, [user]);

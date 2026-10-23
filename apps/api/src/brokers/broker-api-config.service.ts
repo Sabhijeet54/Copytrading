@@ -13,6 +13,7 @@ import { DhanClient } from '../trading/dhan.adapter';
 import { FyersClient } from '../trading/fyers.adapter';
 import { KotakNeoClient } from '../trading/kotak.adapter';
 import { FivePaisaClient } from '../trading/fivepaisa.adapter';
+import { AliceBlueClient } from '../trading/aliceblue.adapter';
 
 /** Secrets kept encrypted; never sent back to the browser. */
 interface Secrets {
@@ -34,7 +35,7 @@ interface StoredSecrets extends Secrets {
 }
 
 /** Brokers that log in server-side every trading morning (no browser): TOTP / PIN, or Fyers refresh token + PIN. */
-const AUTO_LOGIN_BROKERS: BrokerName[] = ['ANGEL_ONE', 'DHAN', 'KOTAK_NEO', 'FIVE_PAISA', 'FYERS'];
+const AUTO_LOGIN_BROKERS: BrokerName[] = ['ANGEL_ONE', 'DHAN', 'KOTAK_NEO', 'FIVE_PAISA', 'FYERS', 'ALICE_BLUE'];
 
 /** Next occurrence of hh:mm IST (today if still ahead, else tomorrow). */
 function nextIst(hh: number, mm: number, now = new Date()): Date {
@@ -125,6 +126,8 @@ export class BrokerApiConfigService implements OnApplicationBootstrap, OnModuleD
         return ['clientCode', 'apiKey', 'mobile', 'pin', 'totpSecret', ...proxy];
       case 'FIVE_PAISA':
         return ['clientCode', 'apiKey', 'apiSecret', 'userId', 'pin', 'totpSecret', ...proxy];
+      case 'ALICE_BLUE':
+        return ['clientCode', 'apiKey', ...proxy];
       default: // ZERODHA, UPSTOX, FYERS: own app key + secret, browser login
         return ['apiKey', 'apiSecret', ...proxy];
     }
@@ -175,7 +178,7 @@ export class BrokerApiConfigService implements OnApplicationBootstrap, OnModuleD
   }
 
   /** Saves the form. Empty secret fields keep what is already stored (so the client never has to re-type them). */
-  async save(userId: string, broker: BrokerName, dto: SaveBrokerApiConfigInput): Promise<BrokerApiConfigView> {
+  async save(userId: string, broker: BrokerName, dto: SaveBrokerApiConfigInput, actorUserId?: string): Promise<BrokerApiConfigView> {
     // Accept "151.245.182.35:443" (IP with port in one box, as other platforms show it) — split it.
     const hp = dto.proxyHost?.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '').match(/^(.+):(\d{1,5})$/);
     if (hp) {
@@ -217,6 +220,15 @@ export class BrokerApiConfigService implements OnApplicationBootstrap, OnModuleD
         ...(proxyChanged ? { lastTestAt: null, lastTestOk: null, lastTestIp: null, lastTestError: null } : {}),
       },
     });
+    const changed = [
+      ...SECRET_KEYS.filter((k) => dto[k]?.trim()),
+      ...(dto.clientCode ? ['clientCode'] : []),
+      ...(proxyChanged ? ['staticIp'] : []),
+      ...(dto.autoLogin !== undefined && dto.autoLogin !== row.autoLogin ? ['autoLogin'] : []),
+    ];
+    await this.prisma.auditLog
+      .create({ data: { action: 'PROFILE_UPDATED', actorUserId: actorUserId ?? userId, targetType: 'BrokerApiConfig', targetId: row.id, metadata: { brokerApi: broker, changed, ownerUserId: userId } } })
+      .catch(() => undefined);
     return this.view(saved, broker);
   }
 
@@ -432,6 +444,21 @@ export class BrokerApiConfigService implements OnApplicationBootstrap, OnModuleD
     );
   }
 
+  /** Alice Blue: user ID + API key → encryption key → session id (valid for the day). */
+  connectAliceBlue(userId: string, client?: ClientInfo) {
+    return this.login(
+      userId,
+      'ALICE_BLUE',
+      [],
+      async (row, s, proxyUrl) => {
+        const r = await new AliceBlueClient({ proxyUrl }).login(row.clientCode!, s.apiKey!);
+        const code = row.clientCode!.toUpperCase();
+        return { brokerClientId: code, accessToken: r.sessionId, extra: { apiKey: s.apiKey, clientCode: code, proxyUrl }, expiresAt: nextIst(23, 55) };
+      },
+      client,
+    );
+  }
+
   /** 5paisa: TOTP + PIN → request token → access token (valid till 11:59 PM). */
   connectFivePaisa(userId: string, client?: ClientInfo) {
     return this.login(
@@ -503,6 +530,8 @@ export class BrokerApiConfigService implements OnApplicationBootstrap, OnModuleD
         return { account: await this.connectKotak(userId, client) };
       case 'FIVE_PAISA':
         return { account: await this.connectFivePaisa(userId, client) };
+      case 'ALICE_BLUE':
+        return { account: await this.connectAliceBlue(userId, client) };
       case 'FYERS':
         return this.fyersLoginUrl(userId);
       default:
@@ -523,6 +552,8 @@ export class BrokerApiConfigService implements OnApplicationBootstrap, OnModuleD
         return this.connectKotak(r.userId);
       case 'FIVE_PAISA':
         return this.connectFivePaisa(r.userId);
+      case 'ALICE_BLUE':
+        return this.connectAliceBlue(r.userId);
       case 'FYERS':
         return this.connectFyers(r.userId, {});
       default:

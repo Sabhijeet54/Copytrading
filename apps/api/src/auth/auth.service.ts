@@ -103,7 +103,7 @@ export class AuthService {
     }
 
     // Separate login pages: clients on /login, masters and admins on /master-login.
-    const staff = user.role === 'MASTER' || user.role === 'ADMIN';
+    const staff = user.role === 'MASTER' || user.role === 'ADMIN' || user.role === 'SUB_ADMIN';
     if (staff !== (dto.portal === 'staff')) {
       await this.audit.log({ action: 'USER_LOGIN_FAILED', actorUserId: user.id, targetType: 'User', targetId: user.id, metadata: { reason: 'wrong_portal', portal: dto.portal ?? 'client' }, client });
       throw new ForbiddenException(staff ? 'Masters and admins sign in on the master login page.' : 'Please sign in on the client login page.');

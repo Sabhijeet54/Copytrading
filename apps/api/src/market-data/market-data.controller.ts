@@ -24,7 +24,7 @@ export class MarketDataController {
    * Cached LTPs for up to 100 "EXCHANGE:SYMBOL" keys (comma separated). Memory only — no broker call — so the
    * UI can poll it every couple of seconds for live price movement. Unknown keys are subscribed on the feed.
    */
-  @Roles('MASTER', 'ADMIN', 'FOLLOWER')
+  @Roles('MASTER', 'ADMIN', 'SUB_ADMIN', 'FOLLOWER')
   @Get('ltps')
   ltps(@Query('keys') keys?: string): Record<string, { ltp: number; ts: string } | null> {
     const out: Record<string, { ltp: number; ts: string } | null> = {};
@@ -38,27 +38,27 @@ export class MarketDataController {
     return out;
   }
 
-  @Roles('MASTER', 'ADMIN')
+  @Roles('MASTER', 'ADMIN', 'SUB_ADMIN')
   @Get('feed/status')
   status(): MarketFeedStatus {
     return this.feed.status();
   }
 
-  @Roles('MASTER', 'ADMIN')
+  @Roles('MASTER', 'ADMIN', 'SUB_ADMIN')
   @HttpCode(HttpStatus.OK)
   @Post('feed/restart')
   restart(): Promise<MarketFeedStatus> {
     return this.feed.restart();
   }
 
-  @Roles('MASTER', 'ADMIN')
+  @Roles('MASTER', 'ADMIN', 'SUB_ADMIN')
   @HttpCode(HttpStatus.OK)
   @Post('feed/broker')
   broker(@Body() dto: FeedBrokerDto): Promise<MarketFeedStatus> {
     return this.feed.setPreferredBroker(dto.broker);
   }
 
-  @Roles('MASTER', 'ADMIN')
+  @Roles('MASTER', 'ADMIN', 'SUB_ADMIN')
   @HttpCode(HttpStatus.OK)
   @Post('feed/subscribe')
   async subscribe(@Body() dto: FeedInstrumentsDto): Promise<MarketFeedStatus> {
@@ -66,7 +66,7 @@ export class MarketDataController {
     return this.feed.status();
   }
 
-  @Roles('MASTER', 'ADMIN')
+  @Roles('MASTER', 'ADMIN', 'SUB_ADMIN')
   @HttpCode(HttpStatus.OK)
   @Post('feed/unsubscribe')
   async unsubscribe(@Body() dto: FeedInstrumentsDto): Promise<MarketFeedStatus> {

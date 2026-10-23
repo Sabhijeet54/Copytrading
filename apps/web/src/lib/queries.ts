@@ -193,7 +193,7 @@ export interface CreateUserInput {
   email: string;
   mobile?: string;
   password: string;
-  role: 'ADMIN' | 'MASTER' | 'FOLLOWER';
+  role: 'ADMIN' | 'SUB_ADMIN' | 'MASTER' | 'FOLLOWER';
   licenceDays?: number;
 }
 
@@ -203,7 +203,7 @@ export function useAdminUserMutations() {
   return {
     create: useMutation({ mutationFn: (body: CreateUserInput) => api('/admin/users', { method: 'POST', body }), onSuccess: done }),
     update: useMutation({
-      mutationFn: ({ id, ...body }: { id: string; name?: string; mobile?: string; role?: 'ADMIN' | 'MASTER' | 'FOLLOWER' }) =>
+      mutationFn: ({ id, ...body }: { id: string; name?: string; mobile?: string; role?: 'ADMIN' | 'SUB_ADMIN' | 'MASTER' | 'FOLLOWER' }) =>
         api(`/admin/users/${id}`, { method: 'PATCH', body }),
       onSuccess: done,
     }),

@@ -33,7 +33,7 @@ export default function AdminPositionsPage() {
       <Card className="overflow-hidden">
         <FilterBar>
           <Field label="Broker">
-            <EnumSelect value={list.filters.broker} onChange={(v) => list.setFilter('broker', v)} options={Object.values(BrokerName)} labels={brokerLabel} />
+            <EnumSelect value={list.filters.broker} onChange={(v) => list.setFilter('broker', v)} options={Object.values(BrokerName).filter((b) => b !== 'ZERODHA')} labels={brokerLabel} />
           </Field>
           <Field label="Show">
             <Select value={list.filters.scope} onChange={(e) => list.setFilter('scope', e.target.value)}>

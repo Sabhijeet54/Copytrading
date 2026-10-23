@@ -48,6 +48,8 @@ export function brokerLabel(broker: string): string {
       return 'Kotak Neo';
     case 'FIVE_PAISA':
       return '5paisa';
+    case 'ALICE_BLUE':
+      return 'Alice Blue';
     case 'MOCK':
       return 'Paper (Mock)';
     default:

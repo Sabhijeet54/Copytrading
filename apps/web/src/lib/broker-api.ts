@@ -4,11 +4,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import { qk } from './queries';
 
-export type BrokerSlug = 'angel-one' | 'zerodha' | 'upstox' | 'dhan' | 'fyers' | 'kotak-neo' | '5paisa';
+export type BrokerSlug = 'angel-one' | 'zerodha' | 'upstox' | 'dhan' | 'fyers' | 'kotak-neo' | '5paisa' | 'alice-blue';
 type SecretKey = 'apiKey' | 'apiSecret' | 'pin' | 'totpSecret' | 'proxyUser' | 'proxyPass' | 'mobile' | 'userId';
 
 export interface BrokerApiConfigView {
-  broker: 'ANGEL_ONE' | 'ZERODHA' | 'UPSTOX' | 'DHAN' | 'FYERS' | 'KOTAK_NEO' | 'FIVE_PAISA';
+  broker: 'ANGEL_ONE' | 'ZERODHA' | 'UPSTOX' | 'DHAN' | 'FYERS' | 'KOTAK_NEO' | 'FIVE_PAISA' | 'ALICE_BLUE';
   clientCode: string | null;
   proxyHost: string | null;
   proxyPort: number | null;

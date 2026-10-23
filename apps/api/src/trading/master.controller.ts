@@ -352,6 +352,10 @@ export class MasterController {
   @Post('orders')
   async placeOrder(@CurrentUser() user: RequestUser, @Body() dto: MasterOrderDto) {
     const strategy = await this.own(user, dto.strategyId);
+    const lic = await this.prisma.user.findUnique({ where: { id: user.id }, select: { licenceExpiresAt: true } });
+    if (lic?.licenceExpiresAt && lic.licenceExpiresAt.getTime() <= Date.now()) {
+      throw new ForbiddenException('Your licence has expired. Contact the admin to renew it.');
+    }
     if (strategy.status !== 'ACTIVE') throw new BadRequestException('Start (activate) the strategy before trading it.');
     if (strategy.allowedExchanges.length && !strategy.allowedExchanges.includes(dto.exchange)) {
       throw new BadRequestException(`${dto.exchange} is not allowed in this strategy.`);

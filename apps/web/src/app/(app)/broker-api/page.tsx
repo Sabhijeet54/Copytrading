@@ -202,6 +202,21 @@ const BROKERS: BrokerMeta[] = [
     daily: '5paisa tokens expire at 11:59 PM. With auto-login ON we reconnect you each morning; otherwise press Connect Broker before 9:15 AM.',
   },
   {
+    slug: 'alice-blue',
+    broker: 'ALICE_BLUE',
+    name: 'Alice Blue',
+    fields: [
+      { key: 'clientCode', label: 'User ID (client code)', required: true, hint: 'e.g. AB123456' },
+      { key: 'apiKey', label: 'API Key', required: true, secret: true, hint: 'ant.aliceblueonline.com → Apps → API key' },
+    ],
+    steps: (ip) => [
+      <>Log in to <strong>ant.aliceblueonline.com</strong> → Apps / API → generate your <strong>API Key</strong>. Whitelist static IP <code>{ip}</code>.</>,
+      <>Enter your Alice Blue <strong>User ID</strong> and the <strong>API Key</strong>, save, then press Connect Broker.</>,
+    ],
+    autoLogin: 'Auto-login every trading morning with my API key.',
+    daily: 'Alice Blue sessions end daily. With auto-login ON we reconnect you each morning (you may need to log in once on the Alice Blue app/web that day).',
+  },
+  {
     slug: 'upstox',
     broker: 'UPSTOX',
     name: 'Upstox',

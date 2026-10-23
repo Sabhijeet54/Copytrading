@@ -57,7 +57,7 @@ interface NavSection {
  * Role-based menus. Every item opens its OWN page (no in-page scrolling to #anchors), so each screen shows
  * one thing clearly.
  */
-const MENUS: Record<Role, NavSection[]> = {
+const MENUS: Partial<Record<Role, NavSection[]>> = {
   MASTER: [
     {
       title: 'Workspace',
@@ -94,6 +94,7 @@ const MENUS: Record<Role, NavSection[]> = {
       items: [
         { href: '/broker-api', label: 'Broker API', icon: KeyRound },
         { href: '/broker', label: 'Broker connection', icon: Building2 },
+        { href: '/activity', label: 'Activity log', icon: History },
         { href: '/settings', label: 'Account settings', icon: Settings },
       ],
     },
@@ -158,7 +159,7 @@ function Dot({ tone }: { tone: 'ok' | 'warn' | 'bad' | 'idle' }) {
 function useStatus(user: AuthUser) {
   const { connected } = useRealtime();
   const brokers = useMyBrokerAccounts();
-  const feedEnabled = user.role === 'MASTER' || user.role === 'ADMIN';
+  const feedEnabled = user.role === 'MASTER' || user.role === 'ADMIN' || user.role === 'SUB_ADMIN';
   const feed = useFeedStatus(feedEnabled);
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -172,7 +173,7 @@ function useStatus(user: AuthUser) {
   return {
     socket: connected,
     marketOpen: open,
-    broker: user.role === 'ADMIN' ? null : brokerConnected ? 'connected' : brokerExpired ? 'expired' : 'disconnected',
+    broker: user.role === 'ADMIN' || user.role === 'SUB_ADMIN' ? null : brokerConnected ? 'connected' : brokerExpired ? 'expired' : 'disconnected',
     feed: feedEnabled ? (feed.data?.state ?? null) : null,
   } as const;
 }
@@ -206,12 +207,12 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
     });
   };
 
-  const sections = MENUS[user.role] ?? [];
-  const workspaceLabel = user.role === 'ADMIN' ? 'Admin workspace' : user.role === 'MASTER' ? 'Master workspace' : 'Client workspace';
+  const sections = MENUS[user.role === 'SUB_ADMIN' ? 'ADMIN' : user.role] ?? [];
+  const workspaceLabel = user.role === 'ADMIN' ? 'Admin workspace' : user.role === 'SUB_ADMIN' ? 'Sub-admin workspace' : user.role === 'MASTER' ? 'Master workspace' : 'Client workspace';
 
   const sidebar = (mini: boolean) => (
     <nav className="flex h-full flex-col gap-5 px-3 py-5">
-      <Link href={user.role === 'ADMIN' ? '/admin' : '/dashboard'} className={cn('flex items-center gap-2 px-2', mini && 'justify-center px-0')}>
+      <Link href={user.role === 'ADMIN' || user.role === 'SUB_ADMIN' ? '/admin' : '/dashboard'} className={cn('flex items-center gap-2 px-2', mini && 'justify-center px-0')}>
         <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground">
           <ClipboardList className="size-4" />
         </span>

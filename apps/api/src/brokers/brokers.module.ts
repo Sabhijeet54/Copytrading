@@ -62,7 +62,7 @@ export class ConnectApiConfigDto {
   @IsOptional() @Transform(trim) @IsString() @MaxLength(4000) accessToken?: string;
 }
 
-const BROKER_SLUG: Record<string, BrokerName> = { 'angel-one': 'ANGEL_ONE', zerodha: 'ZERODHA', upstox: 'UPSTOX', dhan: 'DHAN', fyers: 'FYERS', 'kotak-neo': 'KOTAK_NEO', '5paisa': 'FIVE_PAISA' };
+const BROKER_SLUG: Record<string, BrokerName> = { 'angel-one': 'ANGEL_ONE', zerodha: 'ZERODHA', upstox: 'UPSTOX', dhan: 'DHAN', fyers: 'FYERS', 'kotak-neo': 'KOTAK_NEO', '5paisa': 'FIVE_PAISA', 'alice-blue': 'ALICE_BLUE' };
 const SLUG_OF: Record<string, string> = Object.fromEntries(Object.entries(BROKER_SLUG).map(([k, v]) => [v, k]));
 function brokerFromSlug(slug: string): BrokerName {
   const b = BROKER_SLUG[slug];

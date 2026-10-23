@@ -252,7 +252,7 @@ export const usePortfolio = () =>
 export function useSetTradingMode() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (mode: 'PAPER' | 'LIVE') => api<{ mode: 'PAPER' | 'LIVE' }>('/follow/trading-mode', { method: 'POST', body: { mode } }),
+    mutationFn: (mode: 'PAPER' | 'LIVE') => api<{ mode: 'PAPER' | 'LIVE'; paperClosed?: number }>('/follow/trading-mode', { method: 'POST', body: { mode } }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['client-dashboard'] });
       void qc.invalidateQueries({ queryKey: ['follow'] });
@@ -591,3 +591,37 @@ export function useDisconnectStrategy() {
     },
   });
 }
+
+// ------------------------------------------------------------------ client: marketplace history & activity log
+
+export interface StrategyHistoryRow {
+  id: string;
+  symbol: string;
+  exchange: string;
+  side: 'BUY' | 'SELL';
+  productType: string;
+  quantity: number;
+  entryPrice: number | null;
+  entryAt: string;
+  exitPrice: number | null;
+  exitAt: string | null;
+  status: 'OPEN' | 'CLOSED';
+  realizedPnl: number;
+  ltp: number | null;
+}
+export const useStrategyHistory = (id: string | null) =>
+  useQuery({ queryKey: ['follow', 'history', id], queryFn: () => api<StrategyHistoryRow[]>(`/follow/strategies/${id}/history`), enabled: !!id });
+
+export interface ActivityRow {
+  id: string;
+  at: string;
+  action: string;
+  by: string;
+  side: 'YOU' | 'ADMIN' | 'MASTER' | 'CLIENT' | 'SYSTEM';
+  on: string | null;
+  metadata: Record<string, unknown> | null;
+  ip: string | null;
+  userAgent: string | null;
+}
+export const useActivity = (page: number) =>
+  useQuery({ queryKey: ['follow', 'activity', page], queryFn: () => api<{ total: number; page: number; pageSize: number; items: ActivityRow[] }>(`/follow/activity?page=${page}`), refetchInterval: 30_000 });

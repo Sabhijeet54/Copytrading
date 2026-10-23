@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Inject, NotFoundException, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { clientInfo } from '../common/client-info';
-import { CurrentUser, RequestUser, Roles } from '../common/decorators/auth.decorators';
+import { AdminOnly, CurrentUser, RequestUser, Roles } from '../common/decorators/auth.decorators';
 import { AdminService } from './admin.service';
 import { CopyEngineService } from '../trading/copy-engine.service';
 import { RiskService } from '../trading/risk.service';
@@ -25,6 +25,8 @@ import {
   AdminMasterTradesQueryDto,
   AdminPositionsQueryDto,
   AdminStrategiesQueryDto,
+  AdminCreateStrategyDto,
+  AdminStrategyMasterDto,
   AdminSystemEventsQueryDto,
   AdminUsersQueryDto,
   ReasonDto,
@@ -45,12 +47,14 @@ export class AdminController {
   ) {}
 
   /** KILL SWITCH: halt copying, turn every subscription OFF and exit all open client positions. */
+  @AdminOnly()
   @Post('kill-switch')
   killSwitch(@CurrentUser() me: RequestUser, @Body() dto: ReasonDto) {
     return this.risk.killSwitch(me.id, dto.reason);
   }
 
   /** Manual square-off of all INTRADAY client positions (same as the auto square-off). */
+  @AdminOnly()
   @Post('square-off')
   squareOff() {
     return this.risk.squareOffAll({ intradayOnly: true });
@@ -224,6 +228,24 @@ export class AdminController {
     return { follower: toStrategyFollowerView(follower), warning, resized };
   }
 
+  /** Create a strategy on behalf of a master (allocate). */
+  @Post('strategies')
+  createStrategy(@CurrentUser() me: RequestUser, @Body() dto: AdminCreateStrategyDto, @Req() req: Request) {
+    return this.admin.createStrategyForMaster(me, dto.masterUserId, dto, clientInfo(req));
+  }
+
+  /** Move a strategy to another master. */
+  @Post('strategies/:id/master')
+  reassignStrategy(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: AdminStrategyMasterDto, @Req() req: Request) {
+    return this.admin.reassignStrategy(me, id, dto.masterUserId, clientInfo(req));
+  }
+
+  /** Remove (archive) a strategy: all client copying stops, history is kept. */
+  @Post('strategies/:id/remove')
+  removeStrategy(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: ReasonDto, @Req() req: Request) {
+    return this.admin.removeStrategy(me, id, dto.reason, clientInfo(req));
+  }
+
   @Post('strategies/:id/pause')
   pauseStrategy(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: ReasonDto, @Req() req: Request) {
     return this.admin.pauseStrategy(me, id, dto.reason, clientInfo(req));
@@ -240,11 +262,13 @@ export class AdminController {
     return { halted: halt !== null, ...(halt ? { halt } : {}) };
   }
 
+  @AdminOnly()
   @Post('copy-trading/halt')
   halt(@CurrentUser() me: RequestUser, @Body() dto: ReasonDto, @Req() req: Request) {
     return this.admin.haltCopyTrading(me, dto.reason, clientInfo(req));
   }
 
+  @AdminOnly()
   @Post('copy-trading/resume')
   resume(@CurrentUser() me: RequestUser, @Body() dto: ReasonDto, @Req() req: Request) {
     return this.admin.resumeCopyTrading(me, dto.reason, clientInfo(req));

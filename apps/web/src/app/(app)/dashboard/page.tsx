@@ -34,7 +34,7 @@ export default function DashboardPage() {
         title={`Welcome, ${user.name.split(' ')[0]}`}
         description={user.role === 'MASTER' ? 'Master trader account' : user.role === 'FOLLOWER' ? 'Client account' : 'Administrator account'}
         actions={
-          user.role === 'ADMIN' ? (
+          user.role === 'ADMIN' || user.role === 'SUB_ADMIN' ? (
             <Button asChild>
               <Link href="/admin">
                 Open admin console <ArrowRight />

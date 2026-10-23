@@ -20,6 +20,7 @@ datasource db {
 /// Role-based access control. One role per user.
 enum Role {
   ADMIN
+  SUB_ADMIN
   MASTER
   FOLLOWER
 }
@@ -37,6 +38,7 @@ enum BrokerName {
   FYERS
   KOTAK_NEO
   FIVE_PAISA
+  ALICE_BLUE
   MOCK
 }
 

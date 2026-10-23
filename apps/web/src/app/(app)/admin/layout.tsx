@@ -7,7 +7,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const { data: user } = useMe();
   if (!user) return null;
   return (
-    <RequireRole user={user} roles={['ADMIN']}>
+    <RequireRole user={user} roles={['ADMIN', 'SUB_ADMIN']}>
       {children}
     </RequireRole>
   );

@@ -137,7 +137,7 @@ function TradingModeSwitch({ b }: { b: NonNullable<Data['broker']> }) {
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Switch to LIVE trading?</DialogTitle>
-            <DialogDescription>From the next strategy trade, orders are placed as REAL orders in your broker account with real money.</DialogDescription>
+            <DialogDescription>From the next strategy trade, orders are placed as REAL orders in your broker account with real money. Any open paper trades are closed now at the current price.</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setConfirmLive(false)}>
@@ -147,7 +147,7 @@ function TradingModeSwitch({ b }: { b: NonNullable<Data['broker']> }) {
               disabled={setMode.isPending}
               onClick={() =>
                 setMode.mutate('LIVE', {
-                  onSuccess: () => (toast.success('LIVE trading is ON'), setConfirmLive(false)),
+                  onSuccess: (r) => (toast.success(r.paperClosed ? `LIVE trading is ON — ${r.paperClosed} open paper trade(s) closed` : 'LIVE trading is ON'), setConfirmLive(false)),
                   onError: (e) => toast.error(e.message),
                 })
               }

@@ -25,7 +25,7 @@ import { useListState } from '@/lib/use-list-state';
 
 const COLS = 10;
 const fmtDay = (iso: string | null) => (iso ? new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }).format(new Date(iso)) : 'N/A');
-const ROLE_LABEL = { FOLLOWER: 'Client', MASTER: 'Master', ADMIN: 'Admin' } as const;
+const ROLE_LABEL: Record<string, string> = { FOLLOWER: 'Client', MASTER: 'Master', SUB_ADMIN: 'Sub-admin', ADMIN: 'Admin' };
 const LICENCE_LABEL = { NONE: 'No licence', ACTIVE: 'Active', EXPIRING: 'Expiring ≤ 7d', EXPIRED: 'Expired' } as const;
 const LICENCE_TONE = { NONE: 'text-muted-foreground', ACTIVE: 'text-success', EXPIRING: 'text-warning', EXPIRED: 'text-destructive' } as const;
 
@@ -86,7 +86,7 @@ export default function AdminUsersPage() {
             <EnumSelect
               value={list.filters.broker}
               onChange={(v) => list.setFilter('broker', v)}
-              options={Object.values(BrokerName)}
+              options={Object.values(BrokerName).filter((b) => b !== 'ZERODHA')}
               labels={brokerLabel}
             />
           </Field>

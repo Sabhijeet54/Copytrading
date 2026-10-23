@@ -22,7 +22,7 @@ export function LoginForm({ portal = 'client' }: { portal?: 'client' | 'staff' }
       { email, password, portal },
       {
         onSuccess: (res) => {
-          const fallback = res.user.role === 'ADMIN' ? '/admin' : '/dashboard';
+          const fallback = res.user.role === 'ADMIN' || res.user.role === 'SUB_ADMIN' ? '/admin' : '/dashboard';
           // Staff portal ignores client deep links and vice versa (different areas).
           router.replace(safeNext(params.get('next'), fallback));
         },

@@ -1,3 +1,4 @@
+import { StrategyDto } from '../../trading/trading.dto';
 import { Transform, Type } from 'class-transformer';
 import { IsBoolean, IsDateString, IsEmail, IsEnum, IsIn, IsInt, IsOptional, IsString, Length, Matches, Max, MaxLength, Min } from 'class-validator';
 import { PASSWORD_MESSAGE, PASSWORD_RULE } from '../../auth/dto/auth.dto';
@@ -24,7 +25,7 @@ export class AdminUsersQueryDto extends PaginationQueryDto {
 }
 
 const lower = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
-const ROLES = ['ADMIN', 'MASTER', 'FOLLOWER'] as const;
+const ROLES = ['ADMIN', 'SUB_ADMIN', 'MASTER', 'FOLLOWER'] as const;
 
 export class CreateUserDto {
   @Transform(trim) @IsString() @Length(2, 100) name!: string;
@@ -113,4 +114,12 @@ export class UpdateUserStatusDto {
 
 export class ReasonDto {
   @Transform(trim) @IsString() @Length(3, 500) reason!: string;
+}
+
+export class AdminStrategyMasterDto {
+  @IsString() masterUserId!: string;
+}
+
+export class AdminCreateStrategyDto extends StrategyDto {
+  @IsString() masterUserId!: string;
 }
