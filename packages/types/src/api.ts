@@ -46,6 +46,8 @@ export interface AuthUser {
   /** Telegram chat id for personal alerts (optional). */
   telegramChatId?: string | null;
   role: Role;
+  /** Set for a master's sub-admin (works inside that master's workspace). */
+  masterId?: string | null;
   status: UserStatus;
   emailVerified: boolean;
   createdAt: IsoDate;

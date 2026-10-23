@@ -193,6 +193,8 @@ model User {
   name            String
   mobile          String?
   role            Role
+  /// Set for a master's sub-admin: the master this staff account works for.
+  parentUserId    String?
   status          UserStatus @default(ACTIVE)
   emailVerifiedAt DateTime?
   lastLoginAt     DateTime?

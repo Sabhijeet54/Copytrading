@@ -23,6 +23,8 @@ export interface RequestUser {
   email: string;
   role: Role;
   sessionId: string;
+  /** Master's sub-admin: the sub-admin's own id while `id` is the master it works for. */
+  actorId?: string;
 }
 
 export type AuthenticatedRequest = Request & { user?: RequestUser; requestId?: string };

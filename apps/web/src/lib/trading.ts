@@ -399,6 +399,7 @@ export interface MasterClientRow {
   mobile: string | null;
   status: string;
   licenceExpiresAt: string | null;
+  licenceDays?: number | null;
   licenceStatus: LicenceState;
   broker: (BrokerAccountView & { simulated: boolean }) | null;
   todayPnl: number;
@@ -455,20 +456,22 @@ export interface UserStrategyRow {
   assigned: boolean;
   subscription: (StrategyFollowerView & { allocation: string }) | null;
 }
-export const useAdminUserStrategies = (userId: string | null) =>
-  useQuery({ queryKey: ['admin', 'user-strategies', userId], queryFn: () => api<UserStrategyRow[]>(`/admin/users/${userId}/strategies`), enabled: !!userId });
+export type StaffScope = 'admin' | 'master';
+const userBase = (scope: StaffScope, userId: string) => (scope === 'admin' ? `/admin/users/${userId}` : `/master/clients/${userId}`);
+export const useAdminUserStrategies = (userId: string | null, scope: StaffScope = 'admin') =>
+  useQuery({ queryKey: [scope, 'user-strategies', userId], queryFn: () => api<UserStrategyRow[]>(`${userBase(scope, userId!)}/strategies`), enabled: !!userId });
 
-export function useAdminUserStrategyMutations(userId: string) {
+export function useAdminUserStrategyMutations(userId: string, scope: StaffScope = 'admin') {
   const qc = useQueryClient();
-  const done = () => void qc.invalidateQueries({ queryKey: ['admin'] });
+  const done = () => void qc.invalidateQueries({ queryKey: [scope] });
   return {
     assign: useMutation({
       mutationFn: ({ strategyId, body }: { strategyId: string; body: AssignStrategyInput }) =>
-        api<{ warning: string | null; resized?: ResizeResult[] }>(`/admin/users/${userId}/strategies/${strategyId}`, { method: 'POST', body }),
+        api<{ warning: string | null; resized?: ResizeResult[] }>(`${userBase(scope, userId)}/strategies/${strategyId}`, { method: 'POST', body }),
       onSuccess: done,
     }),
     remove: useMutation({
-      mutationFn: (strategyId: string) => api(`/admin/users/${userId}/strategies/${strategyId}/remove`, { method: 'POST' }),
+      mutationFn: (strategyId: string) => api(`${userBase(scope, userId)}/strategies/${strategyId}/remove`, { method: 'POST' }),
       onSuccess: done,
     }),
   };
@@ -625,3 +628,36 @@ export interface ActivityRow {
 }
 export const useActivity = (page: number) =>
   useQuery({ queryKey: ['follow', 'activity', page], queryFn: () => api<{ total: number; page: number; pageSize: number; items: ActivityRow[] }>(`/follow/activity?page=${page}`), refetchInterval: 30_000 });
+
+// ------------------------------------------------------------ master: client licence & sub-admins
+
+export function useMasterLicenceMutations() {
+  const qc = useQueryClient();
+  const done = () => void qc.invalidateQueries({ queryKey: ['master'] });
+  return {
+    licence: useMutation({
+      mutationFn: ({ id, days, extend }: { id: string; days: number; extend: boolean }) => api(`/master/clients/${id}/licence`, { method: 'POST', body: { days, extend } }),
+      onSuccess: done,
+    }),
+    revoke: useMutation({ mutationFn: (id: string) => api(`/master/clients/${id}/licence/revoke`, { method: 'POST' }), onSuccess: done }),
+  };
+}
+
+export interface SubAdminRow {
+  id: string;
+  name: string;
+  email: string;
+  mobile: string | null;
+  status: string;
+  createdAt: string;
+  lastLoginAt: string | null;
+}
+export const useSubAdmins = () => useQuery({ queryKey: ['master', 'sub-admins'], queryFn: () => api<SubAdminRow[]>('/master/sub-admins') });
+export function useSubAdminMutations() {
+  const qc = useQueryClient();
+  const done = () => void qc.invalidateQueries({ queryKey: ['master', 'sub-admins'] });
+  return {
+    create: useMutation({ mutationFn: (body: { name: string; email: string; mobile?: string; password: string }) => api('/master/sub-admins', { method: 'POST', body }), onSuccess: done }),
+    setStatus: useMutation({ mutationFn: ({ id, status }: { id: string; status: 'ACTIVE' | 'DISABLED' }) => api(`/master/sub-admins/${id}/status`, { method: 'POST', body: { status } }), onSuccess: done }),
+  };
+}

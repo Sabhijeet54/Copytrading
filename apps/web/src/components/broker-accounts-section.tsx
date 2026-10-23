@@ -13,6 +13,8 @@ import { useMyBrokerAccounts } from '@/lib/queries';
 export function BrokerAccountsSection({ user }: { user: AuthUser }) {
   const accounts = useMyBrokerAccounts();
   const angel = accounts.data?.find((a) => a.broker === 'ANGEL_ONE');
+  // Zerodha is not offered to masters / admins any more.
+  const list = (accounts.data ?? []).filter((a) => user.role === 'FOLLOWER' || a.broker !== 'ZERODHA');
   return (
     <Card>
       <CardHeader>
@@ -26,9 +28,9 @@ export function BrokerAccountsSection({ user }: { user: AuthUser }) {
       <CardContent>
         {accounts.isLoading ? (
           <Skeleton className="h-16 w-full" />
-        ) : accounts.data && accounts.data.length > 0 ? (
+        ) : list.length > 0 ? (
           <div className="grid gap-3">
-            {accounts.data.map((a) => (
+            {list.map((a) => (
               <BrokerAccountCard key={a.id} account={a} />
             ))}
           </div>

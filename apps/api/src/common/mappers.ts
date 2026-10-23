@@ -41,6 +41,7 @@ export function toAuthUser(u: User): AuthUser {
     mobile: u.mobile,
     telegramChatId: u.telegramChatId,
     role: u.role,
+    masterId: u.parentUserId ?? null,
     status: u.status,
     emailVerified: u.emailVerifiedAt !== null,
     createdAt: u.createdAt.toISOString(),

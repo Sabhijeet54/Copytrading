@@ -262,7 +262,18 @@ export class CopyEngineService {
       entryBlock: string | null;
     },
   ): Promise<CopyResult> {
-    const base = { followerId: c.followerId, userId: c.userId, accountId: c.accountId, broker: c.broker, simulated: c.simulated };
+    // A trade opened in PAPER mode must also be exited in paper, even if the client switched to LIVE since
+    // (otherwise the exit would go to the real broker where nothing is held, and the paper trade never closes).
+    let paperAccountId: string | null = null;
+    let paperQty = 0;
+    if (x.closing && !c.simulated) {
+      const pp = await this.prisma.position
+        .findFirst({ where: { userId: c.userId, isPaper: true, exchange: x.t.exchange, symbol: x.t.symbol, productType: x.t.productType, quantity: { not: 0 } }, select: { brokerAccountId: true, quantity: true } })
+        .catch(() => null);
+      if (pp && Math.sign(pp.quantity) !== Math.sign(x.signed)) (paperAccountId = pp.brokerAccountId), (paperQty = Math.abs(pp.quantity));
+    }
+    const sim = c.simulated || paperAccountId !== null;
+    const base = { followerId: c.followerId, userId: c.userId, accountId: paperAccountId ?? c.accountId, broker: c.broker, simulated: sim };
     const skip = (reason: string): CopyResult => ({ ...base, qty: 0, status: 'REJECTED', errorCode: 'SKIPPED', errorMessage: reason, attempts: 0 });
     const registry = this.registry!;
     const { t } = x;
@@ -294,7 +305,8 @@ export class CopyEngineService {
     }
     registry.day(c.followerId).trades++;
 
-    if (c.simulated) {
+    if (sim) {
+      if (paperAccountId && paperQty) qty = Math.min(qty, paperQty);
       const fillPrice = x.price ?? 0;
       registry.applyClientFill(c.followerId, t.exchange, t.symbol, t.productType, t.side === 'BUY' ? qty : -qty);
       const latencyMs = Math.round(performance.now() - x.t0);

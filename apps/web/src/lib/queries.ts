@@ -36,7 +36,9 @@ export function useMe() {
     queryKey: qk.me,
     queryFn: async () => {
       try {
-        return await api<AuthUser>('/auth/me');
+        const u = await api<AuthUser>('/auth/me');
+        // A master's sub-admin works inside that master's workspace: treat as MASTER in the UI.
+        return u.role === 'SUB_ADMIN' && u.masterId ? ({ ...u, role: 'MASTER', isSubAdmin: true } as AuthUser & { isSubAdmin?: boolean }) : (u as AuthUser & { isSubAdmin?: boolean });
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) return null;
         throw err;

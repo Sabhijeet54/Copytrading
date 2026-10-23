@@ -36,7 +36,7 @@ export class AuthGuard implements CanActivate {
 
     const session = await this.prisma.session.findUnique({
       where: { id: payload.sid },
-      select: { revokedAt: true, expiresAt: true, userId: true, user: { select: { id: true, email: true, role: true, status: true } } },
+      select: { revokedAt: true, expiresAt: true, userId: true, user: { select: { id: true, email: true, role: true, status: true, parentUserId: true } } },
     });
     if (!session || session.userId !== payload.sub || session.revokedAt || session.expiresAt.getTime() <= Date.now()) {
       throw new UnauthorizedException('Session expired');
@@ -45,7 +45,16 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException('Account disabled');
     }
 
-    req.user = { id: session.user.id, email: session.user.email, role: session.user.role, sessionId: payload.sid };
+    const u = session.user;
+    if (u.role === 'SUB_ADMIN' && u.parentUserId) {
+      // A master's sub-admin works as that master on master / market routes, and is a MASTER everywhere
+      // (never reaches the platform admin panel). Own profile / password routes keep the sub-admin's own id.
+      const path = (req.originalUrl ?? req.url ?? '').split('?')[0]!.replace(/^\/api/, '');
+      const asMaster = path.startsWith('/master') || path.startsWith('/market');
+      req.user = { id: asMaster ? u.parentUserId : u.id, email: u.email, role: 'MASTER', sessionId: payload.sid, actorId: u.id };
+      return true;
+    }
+    req.user = { id: u.id, email: u.email, role: u.role, sessionId: payload.sid };
     return true;
   }
 }

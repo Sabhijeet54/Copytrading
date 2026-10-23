@@ -3,7 +3,9 @@ import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import type Redis from 'ioredis';
 import type { PrismaClient, Strategy } from '@ctp/database';
-import { generateToken } from '@ctp/shared';
+import { generateToken, hashPassword } from '@ctp/shared';
+import { AssignLicenceDto, MasterSubAdminDto, UpdateUserStatusDto } from '../admin/dto/admin.dto';
+import { AssignStrategyDto } from './trading.dto';
 import { AuditService } from '../audit/audit.service';
 import { clientInfo } from '../common/client-info';
 import { CurrentUser, RequestUser, Roles } from '../common/decorators/auth.decorators';
@@ -222,6 +224,116 @@ export class MasterController {
     return clientDirectory(this.prisma, search, strategyId);
   }
 
+  // ------------------------------------------------------------ client licence & strategy access (by master)
+
+  /** The client must be (or have been) on one of my strategies. */
+  private async myClient(user: RequestUser, userId: string) {
+    const link = await this.prisma.strategyFollower.findFirst({ where: { followerUserId: userId, strategy: { masterUserId: user.id } }, select: { id: true } });
+    if (!link) throw new ForbiddenException('This client is not on any of your strategies');
+    const u = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!u || u.role !== 'FOLLOWER') throw new NotFoundException('Client not found');
+    return u;
+  }
+
+  /** Assign / extend (extend=true) or set fresh (extend=false) a client's licence. */
+  @HttpCode(HttpStatus.OK)
+  @Post('clients/:userId/licence')
+  async clientLicence(@CurrentUser() user: RequestUser, @Param('userId') userId: string, @Body() dto: AssignLicenceDto, @Req() req: Request) {
+    const u = await this.myClient(user, userId);
+    const now = new Date();
+    const running = u.licenceExpiresAt && u.licenceExpiresAt > now;
+    const extend = dto.extend !== false && running;
+    const expires = new Date((extend ? u.licenceExpiresAt!.getTime() : now.getTime()) + dto.days * 86_400_000);
+    await this.prisma.user.update({ where: { id: userId }, data: { licenceDays: (extend ? (u.licenceDays ?? 0) : 0) + dto.days, licenceAssignedAt: now, licenceExpiresAt: expires } });
+    await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: user.actorId ?? user.id, targetType: 'User', targetId: userId, metadata: { licenceDays: dto.days, extend: !!extend, expiresAt: expires.toISOString(), byMaster: true }, client: clientInfo(req) });
+    this.accountEvents.emit({ type: 'settings', brokerAccountId: '', userId });
+    return { licenceExpiresAt: expires.toISOString() };
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('clients/:userId/licence/revoke')
+  async clientLicenceRevoke(@CurrentUser() user: RequestUser, @Param('userId') userId: string, @Req() req: Request) {
+    await this.myClient(user, userId);
+    await this.prisma.user.update({ where: { id: userId }, data: { licenceExpiresAt: new Date() } });
+    await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: user.actorId ?? user.id, targetType: 'User', targetId: userId, metadata: { licenceRevoked: true, byMaster: true }, client: clientInfo(req) });
+    this.accountEvents.emit({ type: 'settings', brokerAccountId: '', userId });
+    return { revoked: true };
+  }
+
+  /** My strategies with this client's assignment (null = not assigned). */
+  @Get('clients/:userId/strategies')
+  async clientStrategies(@CurrentUser() user: RequestUser, @Param('userId') userId: string) {
+    await this.myClient(user, userId);
+    const [strategies, subs] = await Promise.all([
+      this.prisma.strategy.findMany({ where: { masterUserId: user.id, status: { not: 'ARCHIVED' } }, include: { master: { select: { name: true } } }, orderBy: { name: 'asc' } }),
+      this.prisma.strategyFollower.findMany({ where: { followerUserId: userId, strategy: { masterUserId: user.id } } }),
+    ]);
+    const bySid = new Map(subs.map((x) => [x.strategyId, x]));
+    return strategies.map((st) => {
+      const sub = bySid.get(st.id);
+      const assigned = !!sub && !isRemoved(sub);
+      return { strategyId: st.id, name: st.name, masterName: st.master.name, status: st.status, assigned, subscription: assigned && sub ? { ...toStrategyFollowerView(sub), allocation: allocationLabel(sub) } : null };
+    });
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('clients/:userId/strategies/:strategyId')
+  async clientAssign(@CurrentUser() user: RequestUser, @Param('userId') userId: string, @Param('strategyId') strategyId: string, @Body() dto: AssignStrategyDto) {
+    const u = await this.myClient(user, userId);
+    const s = await this.own(user, strategyId);
+    const { follower, warning, resized } = await this.assigner.assign(s, { ...dto, email: u.email }, user.actorId ?? user.id);
+    return { follower: toStrategyFollowerView(follower), warning, resized };
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('clients/:userId/strategies/:strategyId/remove')
+  async clientUnassign(@CurrentUser() user: RequestUser, @Param('userId') userId: string, @Param('strategyId') strategyId: string) {
+    await this.own(user, strategyId);
+    const sub = await this.prisma.strategyFollower.findUnique({ where: { strategyId_followerUserId: { strategyId, followerUserId: userId } } });
+    if (!sub) throw new NotFoundException('This strategy is not assigned to the client');
+    return toStrategyFollowerView(await this.assigner.unassign(strategyId, sub.id, user.actorId ?? user.id));
+  }
+
+  // ------------------------------------------------------------ sub-admins (staff working for this master)
+
+  private noSubAdmin(user: RequestUser) {
+    if (user.actorId) throw new ForbiddenException('Only the master can manage sub-admins');
+  }
+
+  @Get('sub-admins')
+  async subAdmins(@CurrentUser() user: RequestUser) {
+    this.noSubAdmin(user);
+    const rows = await this.prisma.user.findMany({
+      where: { parentUserId: user.id, role: 'SUB_ADMIN' },
+      select: { id: true, name: true, email: true, mobile: true, status: true, createdAt: true, lastLoginAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString(), lastLoginAt: r.lastLoginAt?.toISOString() ?? null }));
+  }
+
+  @Post('sub-admins')
+  async createSubAdmin(@CurrentUser() user: RequestUser, @Body() dto: MasterSubAdminDto, @Req() req: Request) {
+    this.noSubAdmin(user);
+    if (await this.prisma.user.findUnique({ where: { email: dto.email } })) throw new BadRequestException('A user with this email already exists');
+    const u = await this.prisma.user.create({
+      data: { name: dto.name, email: dto.email, mobile: dto.mobile ?? null, role: 'SUB_ADMIN', parentUserId: user.id, passwordHash: await hashPassword(dto.password), emailVerifiedAt: new Date() },
+    });
+    await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: user.id, targetType: 'User', targetId: u.id, metadata: { subAdminCreated: true }, client: clientInfo(req) });
+    return { id: u.id, name: u.name, email: u.email };
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('sub-admins/:id/status')
+  async subAdminStatus(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: UpdateUserStatusDto, @Req() req: Request) {
+    this.noSubAdmin(user);
+    const u = await this.prisma.user.findFirst({ where: { id, parentUserId: user.id, role: 'SUB_ADMIN' } });
+    if (!u) throw new NotFoundException('Sub-admin not found');
+    await this.prisma.user.update({ where: { id }, data: { status: dto.status } });
+    if (dto.status !== 'ACTIVE') await this.prisma.session.updateMany({ where: { userId: id, revokedAt: null }, data: { revokedAt: new Date() } });
+    await this.audit.log({ action: dto.status === 'ACTIVE' ? 'ADMIN_ENABLED_USER' : 'ADMIN_DISABLED_USER', actorUserId: user.id, targetType: 'User', targetId: id, client: clientInfo(req) });
+    return { id, status: dto.status };
+  }
+
   /** Every client of my strategies (one row per client) with broker status, today's P&L and subscriptions. */
   @Get('clients')
   async clients(@CurrentUser() user: RequestUser) {
@@ -229,7 +341,7 @@ export class MasterController {
       where: { strategy: { masterUserId: user.id } },
       include: {
         strategy: { select: { name: true } },
-        follower: { select: { id: true, name: true, email: true, mobile: true, status: true, licenceExpiresAt: true } },
+        follower: { select: { id: true, name: true, email: true, mobile: true, status: true, licenceExpiresAt: true, licenceDays: true } },
         brokerAccount: true,
       },
       orderBy: { createdAt: 'asc' },
@@ -248,6 +360,7 @@ export class MasterController {
           mobile: f.mobile,
           status: f.status,
           licenceExpiresAt: f.licenceExpiresAt?.toISOString() ?? null,
+          licenceDays: f.licenceDays,
           licenceStatus: licenceStatus(f.licenceExpiresAt),
           broker: account ? { ...toBrokerAccountView(account), simulated: this.trading.isSimulated(account) } : null,
           todayPnl: day.todayPnl,

@@ -11,7 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { formatDateTime } from '@/lib/format';
 import { useAdminUserMutations, useMe } from '@/lib/queries';
-import { type UserStrategyRow, useAdminUserStrategies, useAdminUserStrategyMutations } from '@/lib/trading';
+import { type StaffScope, type UserStrategyRow, useAdminUserStrategies, useAdminUserStrategyMutations, useMasterLicenceMutations } from '@/lib/trading';
 import { cn } from '@/lib/utils';
 import { toastResized } from '@/lib/resize-toast';
 
@@ -196,8 +196,10 @@ export function EditUserDialog({ user, onClose }: { user: AdminUserListItem | nu
   );
 }
 
-export function LicenceDialog({ user, onClose }: { user: AdminUserListItem | null; onClose: () => void }) {
-  const { licence, revoke } = useAdminUserMutations();
+export function LicenceDialog({ user, onClose, scope = 'admin' }: { user: Pick<AdminUserListItem, 'id' | 'name' | 'mobile' | 'licenceDays' | 'licenceExpiresAt'> | null; onClose: () => void; scope?: StaffScope }) {
+  const adminM = useAdminUserMutations();
+  const masterM = useMasterLicenceMutations();
+  const { licence, revoke } = scope === 'admin' ? adminM : masterM;
   const [plan, setPlan] = useState('30');
   const [custom, setCustom] = useState('');
   const [extend, setExtend] = useState(true);
@@ -263,8 +265,8 @@ export function LicenceDialog({ user, onClose }: { user: AdminUserListItem | nul
 }
 
 /** Which strategies this client gets, and with which lot multiplier / allocation. */
-export function UserStrategiesDialog({ user, onClose }: { user: Pick<AdminUserListItem, 'id' | 'name' | 'email'> | null; onClose: () => void }) {
-  const q = useAdminUserStrategies(user?.id ?? null);
+export function UserStrategiesDialog({ user, onClose, scope = 'admin' }: { user: Pick<AdminUserListItem, 'id' | 'name' | 'email'> | null; onClose: () => void; scope?: StaffScope }) {
+  const q = useAdminUserStrategies(user?.id ?? null, scope);
   return (
     <Dialog open={!!user} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-h-[90dvh] max-w-2xl overflow-y-auto">
@@ -275,14 +277,14 @@ export function UserStrategiesDialog({ user, onClose }: { user: Pick<AdminUserLi
         {q.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
         {q.error ? <p className="text-sm text-destructive">{q.error.message}</p> : null}
         {q.data && q.data.length === 0 ? <p className="text-sm text-muted-foreground">No strategies exist yet — a master must create one first.</p> : null}
-        <div className="grid gap-3">{user ? q.data?.map((row) => <StrategyAccessRow key={row.strategyId} userId={user.id} row={row} />) : null}</div>
+        <div className="grid gap-3">{user ? q.data?.map((row) => <StrategyAccessRow key={row.strategyId} userId={user.id} row={row} scope={scope} />) : null}</div>
       </DialogContent>
     </Dialog>
   );
 }
 
-function StrategyAccessRow({ userId, row }: { userId: string; row: UserStrategyRow }) {
-  const { assign, remove } = useAdminUserStrategyMutations(userId);
+function StrategyAccessRow({ userId, row, scope = 'admin' }: { userId: string; row: UserStrategyRow; scope?: StaffScope }) {
+  const { assign, remove } = useAdminUserStrategyMutations(userId, scope);
   const [open, setOpen] = useState(false);
   const [alloc, setAlloc] = useState<AllocState>(allocFromSub(row.subscription));
   const [startCopy, setStartCopy] = useState(false);

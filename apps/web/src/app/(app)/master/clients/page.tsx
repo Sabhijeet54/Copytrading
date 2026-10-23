@@ -1,6 +1,7 @@
 'use client';
 
-import { Search } from 'lucide-react';
+import { KeyRound, Layers, Search } from 'lucide-react';
+import { LicenceDialog, UserStrategiesDialog } from '@/components/admin-user-dialogs';
 import Link from 'next/link';
 import { useState } from 'react';
 import { Pnl } from '@/components/live-account';
@@ -11,7 +12,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { brokerLabel, formatDateTime } from '@/lib/format';
-import { useMasterClients } from '@/lib/trading';
+import { type MasterClientRow, useMasterClients } from '@/lib/trading';
 
 const LIC = { NONE: 'No licence', ACTIVE: 'Active', EXPIRING: 'Expiring', EXPIRED: 'Expired' } as const;
 const LIC_TONE = { NONE: 'text-muted-foreground', ACTIVE: 'text-success', EXPIRING: 'text-warning', EXPIRED: 'text-destructive' } as const;
@@ -19,6 +20,8 @@ const LIC_TONE = { NONE: 'text-muted-foreground', ACTIVE: 'text-success', EXPIRI
 export default function MasterClientsPage() {
   const q = useMasterClients();
   const [search, setSearch] = useState('');
+  const [lic, setLic] = useState<MasterClientRow | null>(null);
+  const [strat, setStrat] = useState<MasterClientRow | null>(null);
   const rows = (q.data ?? []).filter((c) => {
     const t = search.trim().toLowerCase();
     return !t || c.name.toLowerCase().includes(t) || c.email.toLowerCase().includes(t) || (c.mobile ?? '').includes(t);
@@ -108,9 +111,17 @@ export default function MasterClientsPage() {
                         <Pnl value={c.todayPnl} />
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button asChild size="sm" variant="outline" className="h-7 px-2 text-xs">
-                          <Link href={`/master/client?id=${c.userId}`}>Details</Link>
-                        </Button>
+                        <div className="flex justify-end gap-1">
+                          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" title="Assign / edit licence" onClick={() => setLic(c)}>
+                            <KeyRound /> Licence
+                          </Button>
+                          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" title="Allocate / remove strategies" onClick={() => setStrat(c)}>
+                            <Layers /> Strategies
+                          </Button>
+                          <Button asChild size="sm" variant="outline" className="h-7 px-2 text-xs">
+                            <Link href={`/master/client?id=${c.userId}`}>Details</Link>
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))
@@ -120,6 +131,12 @@ export default function MasterClientsPage() {
           </div>
         </CardContent>
       </Card>
+      <LicenceDialog
+        scope="master"
+        user={lic ? { id: lic.userId, name: lic.name, mobile: lic.mobile, licenceDays: lic.licenceDays ?? null, licenceExpiresAt: lic.licenceExpiresAt } : null}
+        onClose={() => setLic(null)}
+      />
+      <UserStrategiesDialog scope="master" user={strat ? { id: strat.userId, name: strat.name, email: strat.email } : null} onClose={() => setStrat(null)} />
     </>
   );
 }

@@ -1,6 +1,8 @@
 'use client';
 
 import {
+  UserCog,
+  ChevronDown,
   Activity,
   ArrowLeftRight,
   BarChart3,
@@ -75,6 +77,7 @@ const MENUS: Partial<Record<Role, NavSection[]>> = {
       title: 'Configuration',
       items: [
         { href: '/broker', label: 'Broker accounts', icon: Wallet },
+        { href: '/master/sub-admins', label: 'Sub-admins', icon: UserCog },
         { href: '/settings', label: 'Profile & settings', icon: Settings },
       ],
     },
@@ -207,8 +210,12 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
     });
   };
 
-  const sections = MENUS[user.role === 'SUB_ADMIN' ? 'ADMIN' : user.role] ?? [];
-  const workspaceLabel = user.role === 'ADMIN' ? 'Admin workspace' : user.role === 'SUB_ADMIN' ? 'Sub-admin workspace' : user.role === 'MASTER' ? 'Master workspace' : 'Client workspace';
+  const isSubAdmin = !!(user as AuthUser & { isSubAdmin?: boolean }).isSubAdmin;
+  const [profileOpen, setProfileOpen] = useState(false);
+  const sections = (MENUS[user.role === 'SUB_ADMIN' ? 'ADMIN' : user.role] ?? []).map((sec) =>
+    isSubAdmin ? { ...sec, items: sec.items.filter((i) => i.href !== '/broker' && i.href !== '/master/sub-admins') } : sec,
+  );
+  const workspaceLabel = user.role === 'ADMIN' ? 'Admin workspace' : user.role === 'SUB_ADMIN' ? 'Sub-admin workspace' : user.role === 'MASTER' ? (isSubAdmin ? 'Sub-admin · master workspace' : 'Master workspace') : 'Client workspace';
 
   const sidebar = (mini: boolean) => (
     <nav className="flex h-full flex-col gap-5 px-3 py-5">
@@ -270,25 +277,6 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
         ))}
       </div>
 
-      <div className={cn('rounded-2xl bg-accent p-3', mini && 'p-2')}>
-        {!mini ? (
-          <>
-            <p className="truncate text-sm font-semibold text-foreground">{user.name}</p>
-            <p className="truncate text-xs text-sidebar-muted">{user.email}</p>
-            <p className="mt-1 text-[11px] uppercase tracking-wider text-sidebar-muted">{humanize(user.role)}</p>
-          </>
-        ) : null}
-        <Button
-          variant="ghost"
-          size="sm"
-          title="Sign out"
-          className={cn('mt-2 h-7 w-full justify-start px-2 text-sidebar-foreground hover:bg-white hover:text-sidebar-active', mini && 'mt-0 justify-center px-0')}
-          disabled={logout.isPending}
-          onClick={() => logout.mutate(undefined, { onSettled: () => router.replace(user.role === 'FOLLOWER' ? '/login' : '/master-login') })}
-        >
-          <LogOut /> {!mini ? 'Sign out' : null}
-        </Button>
-      </div>
     </nav>
   );
 
@@ -339,6 +327,42 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
               <Dot tone={status.socket ? 'ok' : 'warn'} />
               <span className="font-semibold tracking-wide">{status.socket ? 'LIVE' : 'OFFLINE'}</span>
             </span>
+            <div className="relative">
+              <button
+                type="button"
+                className="flex items-center gap-2 rounded-full border bg-card py-1 pl-1 pr-2 text-sm hover:bg-muted"
+                onClick={() => setProfileOpen((o) => !o)}
+                aria-haspopup="menu"
+                aria-expanded={profileOpen}
+              >
+                <span className="grid size-7 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">{(user.name || '?').slice(0, 1).toUpperCase()}</span>
+                <span className="max-w-32 truncate font-medium max-sm:hidden">{user.name}</span>
+                <ChevronDown className="size-3.5 text-muted-foreground" />
+              </button>
+              {profileOpen ? (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setProfileOpen(false)} />
+                  <div role="menu" className="absolute right-0 z-50 mt-2 w-64 rounded-xl border bg-card p-3 shadow-lg">
+                    <p className="truncate text-sm font-semibold">{user.name}</p>
+                    <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+                    <p className="mt-1 text-[11px] uppercase tracking-wider text-muted-foreground">{isSubAdmin ? 'Sub-admin' : user.role === 'FOLLOWER' ? 'Client' : humanize(user.role)}</p>
+                    <div className="mt-3 grid gap-1 border-t pt-2">
+                      <Link href="/settings" className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-muted" onClick={() => setProfileOpen(false)}>
+                        <Settings className="size-4" /> Profile &amp; settings
+                      </Link>
+                      <button
+                        type="button"
+                        className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-destructive hover:bg-muted"
+                        disabled={logout.isPending}
+                        onClick={() => logout.mutate(undefined, { onSettled: () => router.replace(user.role === 'FOLLOWER' ? '/login' : '/master-login') })}
+                      >
+                        <LogOut className="size-4" /> Sign out
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : null}
+            </div>
           </div>
         </header>
         <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</main>

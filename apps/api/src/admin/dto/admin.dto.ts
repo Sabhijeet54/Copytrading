@@ -123,3 +123,10 @@ export class AdminStrategyMasterDto {
 export class AdminCreateStrategyDto extends StrategyDto {
   @IsString() masterUserId!: string;
 }
+
+export class MasterSubAdminDto {
+  @Transform(trim) @IsString() @Length(2, 100) name!: string;
+  @Transform(lower) @IsEmail() @MaxLength(254) email!: string;
+  @IsOptional() @Transform(trim) @Matches(/^[0-9+\-\s]{7,20}$/, { message: 'Invalid mobile number' }) mobile?: string;
+  @IsString() @Matches(PASSWORD_RULE, { message: PASSWORD_MESSAGE }) password!: string;
+}
