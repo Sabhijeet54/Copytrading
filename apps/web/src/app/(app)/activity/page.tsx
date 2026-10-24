@@ -81,12 +81,12 @@ export default function ActivityPage() {
   const rows = q.data?.items ?? [];
   return (
     <>
-      <PageHeader title="Activity log" description="Every change on your account — who made it (you, admin, master or system) — and your logins." />
+      <PageHeader title="Activity log" description="Last 24 hours: every change on your account — who made it (you, admin, master or system) — and your logins." />
       <Card className="overflow-hidden">
         {q.isLoading ? (
           <p className="p-4 text-sm text-muted-foreground">Loading…</p>
         ) : !rows.length ? (
-          <p className="p-4 text-sm text-muted-foreground">No activity yet.</p>
+          <p className="p-4 text-sm text-muted-foreground">No activity in the last 24 hours.</p>
         ) : (
           <div className="divide-y">
             {rows.map((r) => (

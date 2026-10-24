@@ -400,6 +400,7 @@ export interface MasterClientRow {
   status: string;
   licenceExpiresAt: string | null;
   licenceDays?: number | null;
+  demo?: boolean;
   licenceStatus: LicenceState;
   broker: (BrokerAccountView & { simulated: boolean }) | null;
   todayPnl: number;
@@ -636,7 +637,7 @@ export function useMasterLicenceMutations() {
   const done = () => void qc.invalidateQueries({ queryKey: ['master'] });
   return {
     licence: useMutation({
-      mutationFn: ({ id, days, extend }: { id: string; days: number; extend: boolean }) => api(`/master/clients/${id}/licence`, { method: 'POST', body: { days, extend } }),
+      mutationFn: ({ id, days, extend, demo }: { id: string; days: number; extend: boolean; demo?: boolean }) => api(`/master/clients/${id}/licence`, { method: 'POST', body: { days, extend, demo } }),
       onSuccess: done,
     }),
     revoke: useMutation({ mutationFn: (id: string) => api(`/master/clients/${id}/licence/revoke`, { method: 'POST' }), onSuccess: done }),
@@ -665,7 +666,10 @@ export function useSubAdminMutations() {
 export function useMasterCreateClient() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { name: string; email: string; mobile?: string; password: string; licenceDays?: number }) => api<{ id: string }>('/master/clients', { method: 'POST', body }),
+    mutationFn: (body: { name: string; email: string; mobile?: string; password: string; licenceDays?: number; demo?: boolean }) => api<{ id: string }>('/master/clients', { method: 'POST', body }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['master'] }),
   });
 }
+
+export const useMasterLicenceQuota = (enabled = true) =>
+  useQuery({ queryKey: ['master', 'licence-quota'], queryFn: () => api<{ remaining: number; customAllowed: boolean }>('/master/licence-quota'), enabled });

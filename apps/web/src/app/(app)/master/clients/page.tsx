@@ -13,7 +13,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { brokerLabel, formatDateTime } from '@/lib/format';
-import { type MasterClientRow, useMasterClients } from '@/lib/trading';
+import { type MasterClientRow, useMasterClients, useMasterLicenceQuota } from '@/lib/trading';
 
 const LIC = { NONE: 'No licence', ACTIVE: 'Active', EXPIRING: 'Expiring', EXPIRED: 'Expired' } as const;
 const LIC_TONE = { NONE: 'text-muted-foreground', ACTIVE: 'text-success', EXPIRING: 'text-warning', EXPIRED: 'text-destructive' } as const;
@@ -24,6 +24,7 @@ export default function MasterClientsPage() {
   const [lic, setLic] = useState<MasterClientRow | null>(null);
   const [strat, setStrat] = useState<MasterClientRow | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const quota = useMasterLicenceQuota();
   const rows = (q.data ?? []).filter((c) => {
     const t = search.trim().toLowerCase();
     return !t || c.name.toLowerCase().includes(t) || c.email.toLowerCase().includes(t) || (c.mobile ?? '').includes(t);
@@ -37,6 +38,9 @@ export default function MasterClientsPage() {
         description="Everyone who follows your strategies. Open a client to see all of their data."
         actions={
           <div className="flex items-center gap-4">
+            <span className="rounded-full bg-primary/10 px-3 py-1 text-sm font-medium text-primary" title="Licences you can still give (set by admin). Demo is free.">
+              Licences left: {quota.data?.remaining ?? '—'}
+            </span>
             <span className="text-sm">
               Today&apos;s P&amp;L (all clients): <strong><Pnl value={total} /></strong>
             </span>
@@ -110,7 +114,10 @@ export default function MasterClientsPage() {
                         </div>
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-xs">
-                        <div className={`font-medium ${LIC_TONE[c.licenceStatus]}`}>{LIC[c.licenceStatus]}</div>
+                        <div className={`font-medium ${LIC_TONE[c.licenceStatus]}`}>
+                          {LIC[c.licenceStatus]}
+                          {c.demo ? <span className="ml-1 rounded bg-amber-100 px-1 text-amber-800">Demo</span> : null}
+                        </div>
                         {c.licenceExpiresAt ? <div className="text-muted-foreground">till {formatDateTime(c.licenceExpiresAt)}</div> : null}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{c.todayTrades}</TableCell>
@@ -140,7 +147,7 @@ export default function MasterClientsPage() {
       </Card>
       <LicenceDialog
         scope="master"
-        user={lic ? { id: lic.userId, name: lic.name, mobile: lic.mobile, licenceDays: lic.licenceDays ?? null, licenceExpiresAt: lic.licenceExpiresAt } : null}
+        user={lic ? { id: lic.userId, name: lic.name, mobile: lic.mobile, licenceDays: lic.licenceDays ?? null, licenceExpiresAt: lic.licenceExpiresAt, demo: lic.demo } : null}
         onClose={() => setLic(null)}
       />
       <AddClientDialog open={addOpen} onOpenChange={setAddOpen} onCreated={(c) => setStrat({ userId: c.id, name: c.name, email: c.email } as MasterClientRow)} />

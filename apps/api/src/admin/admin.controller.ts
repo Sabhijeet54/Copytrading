@@ -27,6 +27,7 @@ import {
   AdminStrategiesQueryDto,
   AdminCreateStrategyDto,
   AdminStrategyMasterDto,
+  LicenceQuotaDto,
   AdminSystemEventsQueryDto,
   AdminUsersQueryDto,
   ReasonDto,
@@ -244,6 +245,22 @@ export class AdminController {
   @Post('strategies/:id/remove')
   removeStrategy(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: ReasonDto, @Req() req: Request) {
     return this.admin.removeStrategy(me, id, dto.reason, clientInfo(req));
+  }
+
+  /** Master licence limit: increase / decrease, and allow custom licence periods. Admin only. */
+  @AdminOnly()
+  @Post('users/:id/licence-quota')
+  async licenceQuota(@CurrentUser() me: RequestUser, @Param('id') id: string, @Body() dto: LicenceQuotaDto, @Req() req: Request) {
+    const u = await this.prisma.user.findUnique({ where: { id }, select: { role: true, licenceQuota: true } });
+    if (!u || u.role !== 'MASTER') throw new NotFoundException('Master not found');
+    const quota = Math.max(0, u.licenceQuota + (dto.delta ?? 0));
+    const row = await this.prisma.user.update({
+      where: { id },
+      data: { licenceQuota: quota, ...(dto.customAllowed !== undefined ? { licenceCustomAllowed: dto.customAllowed } : {}) },
+      select: { licenceQuota: true, licenceCustomAllowed: true },
+    });
+    await this.prisma.auditLog.create({ data: { action: 'PROFILE_UPDATED', actorUserId: me.id, targetType: 'User', targetId: id, ip: clientInfo(req).ip ?? null, metadata: { licenceQuota: row.licenceQuota, delta: dto.delta ?? 0, customAllowed: row.licenceCustomAllowed } } });
+    return { remaining: row.licenceQuota, customAllowed: row.licenceCustomAllowed };
   }
 
   @Post('strategies/:id/pause')

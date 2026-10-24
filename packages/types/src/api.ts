@@ -247,6 +247,11 @@ export interface AdminUserListItem {
   createdAt: IsoDate;
   brokerAccounts: Pick<BrokerAccountView, 'id' | 'broker' | 'status'>[];
   licenceDays: number | null;
+  /** Demo licence: paper only. */
+  demo?: boolean;
+  /** Master: licences left / custom periods allowed. */
+  licenceQuota?: number;
+  licenceCustomAllowed?: boolean;
   licenceAssignedAt: IsoDate | null;
   licenceExpiresAt: IsoDate | null;
   /** NONE = no licence assigned, ACTIVE, EXPIRING (≤ 7 days), EXPIRED. */

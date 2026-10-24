@@ -240,12 +240,14 @@ export class MasterController {
   @Post('clients/:userId/licence')
   async clientLicence(@CurrentUser() user: RequestUser, @Param('userId') userId: string, @Body() dto: AssignLicenceDto, @Req() req: Request) {
     const u = await this.myClient(user, userId);
+    await this.useLicence(user, dto.days, !!dto.demo);
     const now = new Date();
     const running = u.licenceExpiresAt && u.licenceExpiresAt > now;
     const extend = dto.extend !== false && running;
     const expires = new Date((extend ? u.licenceExpiresAt!.getTime() : now.getTime()) + dto.days * 86_400_000);
-    await this.prisma.user.update({ where: { id: userId }, data: { licenceDays: (extend ? (u.licenceDays ?? 0) : 0) + dto.days, licenceAssignedAt: now, licenceExpiresAt: expires } });
-    await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: user.actorId ?? user.id, targetType: 'User', targetId: userId, metadata: { licenceDays: dto.days, extend: !!extend, expiresAt: expires.toISOString(), byMaster: true }, client: clientInfo(req) });
+    await this.prisma.user.update({ where: { id: userId }, data: { licenceDays: (extend ? (u.licenceDays ?? 0) : 0) + dto.days, licenceAssignedAt: now, licenceExpiresAt: expires, demo: !!dto.demo } });
+    if (dto.demo) await this.prisma.brokerAccount.updateMany({ where: { userId, mode: 'TRADING' }, data: { isPaper: true } });
+    await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: user.actorId ?? user.id, targetType: 'User', targetId: userId, metadata: { licenceDays: dto.days, demo: !!dto.demo, extend: !!extend, expiresAt: expires.toISOString(), byMaster: true }, client: clientInfo(req) });
     this.accountEvents.emit({ type: 'settings', brokerAccountId: '', userId });
     return { licenceExpiresAt: expires.toISOString() };
   }
@@ -260,10 +262,31 @@ export class MasterController {
     return { revoked: true };
   }
 
+  /**
+   * Licence limit set by the admin: a 2-day / 30-day / custom licence uses one licence from the master's quota
+   * (demo licences are free). Custom periods need the admin's permission.
+   */
+  private async useLicence(user: RequestUser, days: number, demo: boolean): Promise<void> {
+    const m = await this.prisma.user.findUnique({ where: { id: user.id }, select: { licenceQuota: true, licenceCustomAllowed: true } });
+    if (!m) throw new NotFoundException('Master not found');
+    if (!demo && days !== 2 && days !== 30 && !m.licenceCustomAllowed) throw new ForbiddenException('Custom licence period is not enabled for you — ask the admin.');
+    if (demo) return;
+    const r = await this.prisma.user.updateMany({ where: { id: user.id, licenceQuota: { gt: 0 } }, data: { licenceQuota: { decrement: 1 } } });
+    if (!r.count) throw new BadRequestException('No licences left in your limit — ask the admin to add more.');
+  }
+
+  /** My licence limit (remaining) and whether custom periods are allowed. */
+  @Get('licence-quota')
+  async licenceQuota(@CurrentUser() user: RequestUser) {
+    const m = await this.prisma.user.findUnique({ where: { id: user.id }, select: { licenceQuota: true, licenceCustomAllowed: true } });
+    return { remaining: m?.licenceQuota ?? 0, customAllowed: m?.licenceCustomAllowed ?? false };
+  }
+
   /** Create a new client (logs in on the client login page). Optional licence right away. */
   @Post('clients')
   async createClient(@CurrentUser() user: RequestUser, @Body() dto: MasterClientCreateDto, @Req() req: Request) {
     if (await this.prisma.user.findUnique({ where: { email: dto.email } })) throw new BadRequestException('A user with this email already exists');
+    if (dto.licenceDays) await this.useLicence(user, dto.licenceDays, !!dto.demo);
     const now = new Date();
     const u = await this.prisma.user.create({
       data: {
@@ -272,6 +295,7 @@ export class MasterController {
         mobile: dto.mobile ?? null,
         role: 'FOLLOWER',
         parentUserId: user.id,
+        demo: !!dto.demo,
         passwordHash: await hashPassword(dto.password),
         emailVerifiedAt: now,
         ...(dto.licenceDays ? { licenceDays: dto.licenceDays, licenceAssignedAt: now, licenceExpiresAt: new Date(now.getTime() + dto.licenceDays * 86_400_000) } : {}),
@@ -375,7 +399,7 @@ export class MasterController {
     for (const o of own) if (!byUser.has(o.id)) byUser.set(o.id, []);
     const ids = [...byUser.keys()];
     const [users, accounts] = await Promise.all([
-      this.prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true, mobile: true, status: true, licenceExpiresAt: true, licenceDays: true } }),
+      this.prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true, mobile: true, status: true, licenceExpiresAt: true, licenceDays: true, demo: true } }),
       this.prisma.brokerAccount.findMany({ where: { userId: { in: ids }, broker: { not: 'MOCK' }, mode: 'TRADING' }, orderBy: { createdAt: 'asc' } }),
     ]);
     const userById = new Map(users.map((u) => [u.id, u]));
@@ -392,6 +416,7 @@ export class MasterController {
           status: f.status,
           licenceExpiresAt: f.licenceExpiresAt?.toISOString() ?? null,
           licenceDays: f.licenceDays,
+          demo: f.demo,
           licenceStatus: licenceStatus(f.licenceExpiresAt),
           broker: account ? { ...toBrokerAccountView(account), simulated: this.trading.isSimulated(account) } : null,
           todayPnl: day.todayPnl,

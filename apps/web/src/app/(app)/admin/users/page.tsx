@@ -3,7 +3,7 @@
 import { Eye, KeyRound, Layers, Pencil, Plus, Search } from 'lucide-react';
 import { useState } from 'react';
 import type { AdminUserListItem } from '@ctp/types';
-import { AddUserDialog, EditUserDialog, LicenceDialog, UserStrategiesDialog } from '@/components/admin-user-dialogs';
+import { AddUserDialog, EditUserDialog, LicenceDialog, LicenceQuotaDialog, UserStrategiesDialog } from '@/components/admin-user-dialogs';
 import { ReasonDialog } from '@/components/reason-dialog';
 import { Select } from '@/components/ui/select';
 import { toast } from 'sonner';
@@ -35,6 +35,7 @@ export default function AdminUsersPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [editUser, setEditUser] = useState<AdminUserListItem | null>(null);
   const [licUser, setLicUser] = useState<AdminUserListItem | null>(null);
+  const [quotaUser, setQuotaUser] = useState<AdminUserListItem | null>(null);
   const [stratUser, setStratUser] = useState<Pick<AdminUserListItem, 'id' | 'name' | 'email'> | null>(null);
   const [disableUser, setDisableUser] = useState<AdminUserListItem | null>(null);
   const setStatus = useAdminAction<{ status: 'ACTIVE' | 'DISABLED'; reason?: string }>('PATCH', (id) => `/admin/users/${id}/status`);
@@ -180,6 +181,11 @@ export default function AdminUsersPage() {
                       <Button size="icon" variant="ghost" className="size-8" title="Assign licence" aria-label={`Licence for ${u.name}`} onClick={() => setLicUser(u)}>
                         <KeyRound />
                       </Button>
+                      {u.role === 'MASTER' ? (
+                        <Button size="sm" variant="outline" className="h-8" title="Licence limit for this master" onClick={() => setQuotaUser(u)}>
+                          Limit: {u.licenceQuota ?? 0}
+                        </Button>
+                      ) : null}
                       {u.role === 'FOLLOWER' ? (
                         <Button size="sm" variant="outline" className="h-8" title="Assign strategies" onClick={() => setStratUser(u)}>
                           <Layers /> Strategy
@@ -213,6 +219,7 @@ export default function AdminUsersPage() {
       />
       <EditUserDialog user={editUser} onClose={() => setEditUser(null)} />
       <LicenceDialog user={licUser} onClose={() => setLicUser(null)} />
+      <LicenceQuotaDialog user={quotaUser} onClose={() => setQuotaUser(null)} />
     </>
   );
 }

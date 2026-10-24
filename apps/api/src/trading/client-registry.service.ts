@@ -222,7 +222,7 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
     const started = Date.now();
     const rows = await this.prisma.strategyFollower.findMany({
       where: { copyStatus: 'ON', strategy: { status: 'ACTIVE' } },
-      include: { brokerAccount: true, strategy: true, follower: { select: { licenceExpiresAt: true, status: true } } },
+      include: { brokerAccount: true, strategy: true, follower: { select: { licenceExpiresAt: true, status: true, demo: true } } },
     });
     const now = Date.now();
     const byStrategy = new Map<string, ClientEntry[]>();
@@ -274,7 +274,8 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
         skip('No broker account selected');
         continue;
       }
-      const simulated = this.trading.isSimulated(a);
+      // Demo licence: always paper, whatever the account switch says.
+      const simulated = this.trading.isSimulated(a) || r.follower.demo;
       if (!simulated) {
         if (a.mode === 'DATA_ONLY') {
           skip('Account is DATA_ONLY (master) — orders blocked');

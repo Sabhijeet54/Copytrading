@@ -73,7 +73,7 @@ export interface ClientDashboard {
     paperForced: boolean;
   } | null;
   subscriptions: { total: number; on: number; off: number; paused: number };
-  licence: { expiresAt: string | null; assignedAt: string | null; days: number | null; remainingDays: number | null; active: boolean | null };
+  licence: { expiresAt: string | null; assignedAt: string | null; days: number | null; remainingDays: number | null; active: boolean | null; demo?: boolean };
   strategies: {
     followerId: string;
     strategyId: string;

@@ -35,6 +35,7 @@ export class CreateUserDto {
   @IsIn(ROLES) role!: (typeof ROLES)[number];
   /** Optional licence to assign right away. */
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(3650) licenceDays?: number;
+  @IsOptional() @IsBoolean() demo?: boolean;
 }
 
 export class UpdateUserDto {
@@ -45,6 +46,8 @@ export class UpdateUserDto {
 
 export class AssignLicenceDto {
   @Type(() => Number) @IsInt() @Min(1) @Max(3650) days!: number;
+  /** Demo licence: paper trading only, live is blocked. */
+  @IsOptional() @IsBoolean() demo?: boolean;
   /** true (default): add the days to a licence that is still running; false: start fresh from today. */
   @IsOptional() @IsBoolean() extend?: boolean;
 }
@@ -133,4 +136,11 @@ export class MasterSubAdminDto {
 
 export class MasterClientCreateDto extends MasterSubAdminDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(3650) licenceDays?: number;
+  @IsOptional() @IsBoolean() demo?: boolean;
+}
+
+export class LicenceQuotaDto {
+  /** Add (+) or remove (−) licences from the master's limit. */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(-100000) @Max(100000) delta?: number;
+  @IsOptional() @IsBoolean() customAllowed?: boolean;
 }

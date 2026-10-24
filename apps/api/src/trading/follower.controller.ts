@@ -43,7 +43,7 @@ export class FollowerController {
   @Get('dashboard')
   async dashboard(@CurrentUser() user: RequestUser) {
     const [me, accounts, day] = await Promise.all([
-      this.prisma.user.findUnique({ where: { id: user.id }, select: { licenceExpiresAt: true, licenceDays: true, licenceAssignedAt: true } }),
+      this.prisma.user.findUnique({ where: { id: user.id }, select: { licenceExpiresAt: true, licenceDays: true, licenceAssignedAt: true, demo: true } }),
       this.prisma.brokerAccount.findMany({ where: { userId: user.id, broker: { not: 'MOCK' }, mode: 'TRADING' }, orderBy: { updatedAt: 'desc' } }),
       this.summary.today(user.id),
     ]);
@@ -77,6 +77,7 @@ export class FollowerController {
         days: me?.licenceDays ?? null,
         remainingDays: exp == null ? null : Math.max(0, Math.ceil((exp - now) / 86_400_000)),
         active: exp == null ? null : exp > now,
+        demo: me?.demo ?? false,
       },
       strategies: subs,
     };
@@ -91,6 +92,10 @@ export class FollowerController {
   async tradingMode(@CurrentUser() user: RequestUser, @Body() dto: TradingModeDto, @Req() req: Request) {
     const accounts = await this.prisma.brokerAccount.findMany({ where: { userId: user.id, broker: { not: 'MOCK' }, mode: 'TRADING' } });
     if (!accounts.length) throw new BadRequestException('Connect your broker first.');
+    if (dto.mode === 'LIVE') {
+      const me = await this.prisma.user.findUnique({ where: { id: user.id }, select: { demo: true } });
+      if (me?.demo) throw new ForbiddenException('Demo licence: only paper trading is allowed. Ask your master for a full licence to trade live.');
+    }
     // PAPER → LIVE: paper trades opened before the switch are closed now (at LTP). Otherwise the master's later
     // exit would go to the live broker (where nothing is held) and the old paper trade would never be cut.
     let paperClosed = 0;
@@ -127,6 +132,7 @@ export class FollowerController {
       this.prisma.brokerApiConfig.findMany({ where: { userId: user.id }, select: { id: true, broker: true } }),
     ]);
     const where = {
+      createdAt: { gte: new Date(Date.now() - 24 * 3_600_000) },
       action: { notIn: ['COPY_ORDER_CREATED', 'COPY_ORDER_SUBMITTED', 'COPY_ORDER_FILLED', 'MASTER_TRADE_DETECTED'] as never[] },
       OR: [
         { actorUserId: user.id },

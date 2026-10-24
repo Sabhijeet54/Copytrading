@@ -195,6 +195,12 @@ model User {
   role            Role
   /// Set for a master's sub-admin: the master this staff account works for.
   parentUserId    String?
+  /// Demo licence: paper trading only (never live). New self sign-ups start in demo.
+  demo            Boolean    @default(false)
+  /// Master: licences left to give clients (set by admin). Each 2-day / 30-day / custom licence uses 1.
+  licenceQuota    Int        @default(0)
+  /// Master: may give custom-period licences (admin grants).
+  licenceCustomAllowed Boolean @default(false)
   status          UserStatus @default(ACTIVE)
   emailVerifiedAt DateTime?
   lastLoginAt     DateTime?

@@ -220,7 +220,8 @@ export function ClientDashboard() {
                   </span>
                   {d.broker.connected ? <Badge tone="ok">Connected</Badge> : <Badge tone="warn">{d.broker.status === 'EXPIRED' ? 'Expired' : 'Not connected'}</Badge>}
                 </div>
-                <TradingModeSwitch b={d.broker} locked={d.licence.active === false} />
+                <TradingModeSwitch b={d.broker} locked={d.licence.active === false || (!!d.licence.demo && d.broker.tradingMode !== 'LIVE')} />
+                {d.licence.demo ? <p className="text-xs text-amber-700">Demo licence — paper trading only.</p> : null}
                 {!d.broker.connected ? (
                   <Button asChild size="sm" variant="outline">
                     <Link href="/broker">Connect broker</Link>
@@ -272,7 +273,7 @@ export function ClientDashboard() {
               <>
                 <p className="flex items-center gap-2">
                   <span className={cn('text-2xl font-semibold tabular-nums', d.licence.active ? 'text-success' : 'text-destructive')}>{d.licence.remainingDays}</span> days left
-                  {d.licence.active ? <Badge tone="ok">Active</Badge> : <Badge tone="warn">Expired</Badge>}
+                  {d.licence.active ? <Badge tone="ok">{d.licence.demo ? 'Demo · paper only' : 'Active'}</Badge> : <Badge tone="warn">Expired</Badge>}
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {d.licence.assignedAt ? (
@@ -286,7 +287,7 @@ export function ClientDashboard() {
               </>
             ) : (
               <>
-                <p className="font-medium">No licence assigned</p>
+                <p className="font-medium">{d.licence.demo ? 'Demo — paper trading only' : 'No licence assigned'}</p>
                 <p className="text-xs text-muted-foreground">Contact your master to activate your subscription.</p>
               </>
             )}

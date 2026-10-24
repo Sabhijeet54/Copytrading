@@ -210,6 +210,7 @@ export class AdminService {
         role: dto.role,
         passwordHash: await hashPassword(dto.password),
         emailVerifiedAt: now, // created by an admin: no verification mail needed
+        demo: dto.role === 'FOLLOWER' && !!dto.demo,
         ...(dto.licenceDays ? { licenceDays: dto.licenceDays, licenceAssignedAt: now, licenceExpiresAt: new Date(now.getTime() + dto.licenceDays * 86_400_000) } : {}),
       },
     });
@@ -246,9 +247,10 @@ export class AdminService {
     const expires = new Date(base.getTime() + dto.days * 86_400_000);
     await this.prisma.user.update({
       where: { id },
-      data: { licenceDays: (dto.extend !== false && running ? (user.licenceDays ?? 0) : 0) + dto.days, licenceAssignedAt: now, licenceExpiresAt: expires },
+      data: { licenceDays: (dto.extend !== false && running ? (user.licenceDays ?? 0) : 0) + dto.days, licenceAssignedAt: now, licenceExpiresAt: expires, demo: !!dto.demo },
     });
-    await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: admin.id, targetType: 'User', targetId: id, metadata: { licenceDays: dto.days, extend: dto.extend !== false, expiresAt: expires.toISOString() }, client });
+    await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: admin.id, targetType: 'User', targetId: id, metadata: { licenceDays: dto.days, demo: !!dto.demo, extend: dto.extend !== false, expiresAt: expires.toISOString() }, client });
+    if (dto.demo) await this.prisma.brokerAccount.updateMany({ where: { userId: id, mode: 'TRADING' }, data: { isPaper: true } });
     this.accountEvents.emit({ type: 'settings', brokerAccountId: '', userId: id });
     return this.getUser(id);
   }

@@ -169,7 +169,7 @@ export class BrokerSessionService {
   }
 
   private async saveSessionOnce(userId: string, broker: BrokerName, s: SessionMaterial, client?: ClientInfo): Promise<BrokerAccount> {
-    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true, licenceExpiresAt: true } });
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true, licenceExpiresAt: true, demo: true } });
     if (!user) throw new NotFoundException('User not found');
     if (user.role === 'FOLLOWER' && user.licenceExpiresAt && user.licenceExpiresAt.getTime() <= Date.now()) {
       throw new ForbiddenException('Your licence has expired — contact your master to renew it before connecting a broker.');
@@ -207,7 +207,7 @@ export class BrokerSessionService {
       const existing = await tx.brokerAccount.upsert({
         where: { userId_broker: { userId, broker } },
         // A new client account starts in PAPER when the platform default is paper (PAPER_MODE=true); the client switches to LIVE.
-        create: { userId, broker, brokerClientId: s.brokerClientId, status: 'PENDING', mode, isPaper: mode === 'TRADING' && this.config.PAPER_MODE },
+        create: { userId, broker, brokerClientId: s.brokerClientId, status: 'PENDING', mode, isPaper: mode === 'TRADING' && (this.config.PAPER_MODE || user.demo) },
         update: {},
       });
       if (existing.status === 'CONNECTED' && existing.brokerClientId && existing.brokerClientId !== s.brokerClientId) {

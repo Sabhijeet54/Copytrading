@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { api } from '@/lib/api';
 import { toast } from 'sonner';
 import type { AdminUserDetail, AdminUserListItem } from '@ctp/types';
 import { AllocationFields, type AllocState, allocFromSub, allocToInput } from '@/components/allocation-fields';
@@ -11,7 +13,7 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { formatDateTime } from '@/lib/format';
 import { useAdminUserMutations, useMe } from '@/lib/queries';
-import { type StaffScope, type UserStrategyRow, useAdminUserStrategies, useAdminUserStrategyMutations, useMasterLicenceMutations } from '@/lib/trading';
+import { type StaffScope, type UserStrategyRow, useAdminUserStrategies, useAdminUserStrategyMutations, useMasterLicenceMutations, useMasterLicenceQuota } from '@/lib/trading';
 import { cn } from '@/lib/utils';
 import { toastResized } from '@/lib/resize-toast';
 
@@ -40,7 +42,7 @@ function useAssignableRoles(): RoleValue[] {
   return me?.role === 'ADMIN' ? ['FOLLOWER', 'MASTER', 'SUB_ADMIN', 'ADMIN'] : ['FOLLOWER', 'MASTER'];
 }
 
-function LicencePicker({ id, plan, custom, onPlan, onCustom, allowNone }: { id: string; plan: string; custom: string; onPlan: (v: string) => void; onCustom: (v: string) => void; allowNone?: boolean }) {
+function LicencePicker({ id, plan, custom, onPlan, onCustom, allowNone, allowDemo = true, allowCustom = true }: { id: string; plan: string; custom: string; onPlan: (v: string) => void; onCustom: (v: string) => void; allowNone?: boolean; allowDemo?: boolean; allowCustom?: boolean }) {
   return (
     <div className="grid grid-cols-[1fr_auto] items-end gap-2">
       <Select id={id} value={plan} onChange={(e) => onPlan(e.target.value)}>
@@ -49,10 +51,11 @@ function LicencePicker({ id, plan, custom, onPlan, onCustom, allowNone }: { id: 
             {p.label}
           </option>
         ))}
-        <option value="custom">Custom period (days)…</option>
+        {allowCustom ? <option value="custom">Custom period (days)…</option> : null}
+        {allowDemo ? <option value="demo">Demo — paper only (days)…</option> : null}
         {allowNone ? <option value="none">No licence</option> : null}
       </Select>
-      {plan === 'custom' ? (
+      {plan === 'custom' || plan === 'demo' ? (
         <Input aria-label="Days" className="w-24" type="number" min={1} max={3650} inputMode="numeric" placeholder="Days" value={custom} onChange={(e) => onCustom(e.target.value)} />
       ) : (
         <span />
@@ -61,7 +64,7 @@ function LicencePicker({ id, plan, custom, onPlan, onCustom, allowNone }: { id: 
   );
 }
 
-const planDays = (plan: string, custom: string) => (plan === 'none' ? undefined : plan === 'custom' ? Number(custom) || undefined : Number(plan));
+const planDays = (plan: string, custom: string) => (plan === 'none' ? undefined : plan === 'custom' || plan === 'demo' ? Number(custom) || undefined : Number(plan));
 
 export function AddUserDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (o: boolean) => void; onCreated?: (u: AdminUserDetail) => void }) {
   const { create } = useAdminUserMutations();
@@ -82,6 +85,7 @@ export function AddUserDialog({ open, onOpenChange, onCreated }: { open: boolean
         password: f.password,
         role: f.role,
         licenceDays: f.role === 'FOLLOWER' || f.role === 'MASTER' ? planDays(f.plan, f.custom) : undefined,
+        demo: f.role === 'FOLLOWER' && f.plan === 'demo',
       },
       {
         onSuccess: (u) => {
@@ -126,7 +130,7 @@ export function AddUserDialog({ open, onOpenChange, onCreated }: { open: boolean
           </F>
           {f.role === 'FOLLOWER' || f.role === 'MASTER' ? (
             <F id="au-lic" label="Licence key" hint={f.role === 'MASTER' ? 'Master cannot place trades after the licence expires' : 'Auto trading stops automatically when the licence expires'}>
-              <LicencePicker id="au-lic" plan={f.plan} custom={f.custom} onPlan={(v) => setF({ ...f, plan: v })} onCustom={(v) => setF({ ...f, custom: v })} allowNone />
+              <LicencePicker id="au-lic" plan={f.plan} custom={f.custom} onPlan={(v) => setF({ ...f, plan: v })} onCustom={(v) => setF({ ...f, custom: v })} allowNone allowDemo={f.role === 'FOLLOWER'} />
             </F>
           ) : null}
           <DialogFooter>
@@ -196,17 +200,19 @@ export function EditUserDialog({ user, onClose }: { user: AdminUserListItem | nu
   );
 }
 
-export function LicenceDialog({ user, onClose, scope = 'admin' }: { user: Pick<AdminUserListItem, 'id' | 'name' | 'mobile' | 'licenceDays' | 'licenceExpiresAt'> | null; onClose: () => void; scope?: StaffScope }) {
+export function LicenceDialog({ user, onClose, scope = 'admin' }: { user: (Pick<AdminUserListItem, 'id' | 'name' | 'mobile' | 'licenceDays' | 'licenceExpiresAt'> & { demo?: boolean; role?: string }) | null; onClose: () => void; scope?: StaffScope }) {
   const adminM = useAdminUserMutations();
   const masterM = useMasterLicenceMutations();
   const { licence, revoke } = scope === 'admin' ? adminM : masterM;
+  const quota = useMasterLicenceQuota(scope === 'master');
   const [plan, setPlan] = useState('30');
   const [custom, setCustom] = useState('');
   const [extend, setExtend] = useState(true);
   useEffect(() => {
     if (user) {
-      if (user.licenceDays === 2 || user.licenceDays === 30) setPlan(String(user.licenceDays)); else { setPlan('custom'); setCustom(String(user.licenceDays ?? 30)); }
-      if (user.licenceDays === 2 || user.licenceDays === 30) setCustom('');
+      if (user.demo) { setPlan('demo'); setCustom(String(user.licenceDays ?? 7)); }
+      else if (user.licenceDays === 2 || user.licenceDays === 30) { setPlan(String(user.licenceDays)); setCustom(''); }
+      else { setPlan('custom'); setCustom(String(user.licenceDays ?? 30)); }
       setExtend(true);
     }
   }, [user]);
@@ -224,7 +230,9 @@ export function LicenceDialog({ user, onClose, scope = 'admin' }: { user: Pick<A
           </DialogDescription>
         </DialogHeader>
         <F id="lic-plan" label="Select licence">
-          <LicencePicker id="lic-plan" plan={plan} custom={custom} onPlan={setPlan} onCustom={setCustom} />
+          <LicencePicker id="lic-plan" plan={plan} custom={custom} onPlan={setPlan} onCustom={setCustom} allowDemo={user?.role !== 'MASTER'} allowCustom={scope === 'admin' || !!quota.data?.customAllowed} />
+          {scope === 'master' && quota.data ? <p className="text-xs text-muted-foreground">Licences left in your limit: <strong>{quota.data.remaining}</strong> (demo is free)</p> : null}
+          {plan === 'demo' ? <p className="text-xs text-muted-foreground">Demo: the client can only paper trade — switching to live is blocked.</p> : null}
         </F>
         {running ? (
           <label className="flex items-center gap-2 text-sm">
@@ -251,8 +259,8 @@ export function LicenceDialog({ user, onClose, scope = 'admin' }: { user: Pick<A
             onClick={() =>
               user &&
               licence.mutate(
-                { id: user.id, days, extend },
-                { onSuccess: () => (toast.success(`Licence of ${days} day(s) assigned`), onClose()), onError: (e) => toast.error(e.message) },
+                { id: user.id, days, extend, demo: plan === 'demo' },
+                { onSuccess: () => (toast.success(plan === 'demo' ? `Demo (paper only) licence of ${days} day(s) assigned` : `Licence of ${days} day(s) assigned`), onClose()), onError: (e) => toast.error(e.message) },
               )
             }
           >
@@ -366,5 +374,52 @@ function StrategyAccessRow({ userId, row, scope = 'admin' }: { userId: string; r
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** Admin: a master's licence limit (licences the master can give clients) and custom-period permission. */
+export function LicenceQuotaDialog({ user, onClose }: { user: Pick<AdminUserListItem, 'id' | 'name' | 'licenceQuota' | 'licenceCustomAllowed'> | null; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [delta, setDelta] = useState('');
+  const [custom, setCustom] = useState(false);
+  useEffect(() => {
+    if (user) {
+      setDelta('');
+      setCustom(!!user.licenceCustomAllowed);
+    }
+  }, [user]);
+  const save = useMutation({
+    mutationFn: (body: { delta?: number; customAllowed?: boolean }) => api<{ remaining: number; customAllowed: boolean }>(`/admin/users/${user!.id}/licence-quota`, { method: 'POST', body }),
+    onSuccess: (r) => (void qc.invalidateQueries({ queryKey: ['admin'] }), toast.success(`Licence limit: ${r.remaining} left`), onClose()),
+    onError: (e) => toast.error(e.message),
+  });
+  const n = Number(delta) || 0;
+  const now = user?.licenceQuota ?? 0;
+  return (
+    <Dialog open={!!user} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Licence limit · {user?.name}</DialogTitle>
+          <DialogDescription>
+            Licences this master can give to clients. Each 2-day / 30-day / custom licence uses 1 (demo is free). Now: <strong>{now}</strong> left.
+          </DialogDescription>
+        </DialogHeader>
+        <F id="lq-delta" label="Add (+) or remove (−) licences" hint={n ? `New limit: ${Math.max(0, now + n)}` : 'e.g. 10 or -5'}>
+          <Input id="lq-delta" type="number" inputMode="numeric" value={delta} onChange={(e) => setDelta(e.target.value)} placeholder="0" />
+        </F>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" className="size-4" checked={custom} onChange={(e) => setCustom(e.target.checked)} />
+          Allow custom licence period (otherwise only Demo / 2 Days / 30 Days)
+        </label>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button disabled={save.isPending} onClick={() => save.mutate({ delta: n || undefined, customAllowed: custom })}>
+            {save.isPending ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

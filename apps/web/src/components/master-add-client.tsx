@@ -7,22 +7,23 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
-import { useMasterCreateClient } from '@/lib/trading';
+import { useMasterCreateClient, useMasterLicenceQuota } from '@/lib/trading';
 
 const EMPTY = { name: '', email: '', mobile: '', password: '', plan: '2', custom: '' };
 
 /** Master creates a client account (client logs in on the client login page). */
 export function AddClientDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (o: boolean) => void; onCreated?: (c: { id: string; name: string; email: string }) => void }) {
   const create = useMasterCreateClient();
+  const quota = useMasterLicenceQuota();
   const [f, setF] = useState(EMPTY);
   useEffect(() => {
     if (open) setF(EMPTY);
   }, [open]);
-  const days = f.plan === 'none' ? undefined : f.plan === 'custom' ? Number(f.custom) || undefined : Number(f.plan);
+  const days = f.plan === 'none' ? undefined : f.plan === 'custom' || f.plan === 'demo' ? Number(f.custom) || undefined : Number(f.plan);
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (f.plan === 'custom' && !days) return toast.error('Enter the number of days');
-    const body = { name: f.name.trim(), email: f.email.trim(), mobile: f.mobile.trim() || undefined, password: f.password, licenceDays: days };
+    if ((f.plan === 'custom' || f.plan === 'demo') && !days) return toast.error('Enter the number of days');
+    const body = { name: f.name.trim(), email: f.email.trim(), mobile: f.mobile.trim() || undefined, password: f.password, licenceDays: days, demo: f.plan === 'demo' };
     create.mutate(body, {
       onSuccess: (r) => (toast.success(`Client ${body.email} created`), onOpenChange(false), onCreated?.({ id: r.id, name: body.name, email: body.email })),
       onError: (err) => toast.error(err.message),
@@ -59,15 +60,17 @@ export function AddClientDialog({ open, onOpenChange, onCreated }: { open: boole
               <Select id="nc-lic" value={f.plan} onChange={(e) => setF({ ...f, plan: e.target.value })}>
                 <option value="2">2 Days</option>
                 <option value="30">1 Month</option>
-                <option value="custom">Custom period (days)…</option>
+                <option value="demo">Demo — paper only (days)…</option>
+                {quota.data?.customAllowed ? <option value="custom">Custom period (days)…</option> : null}
                 <option value="none">No licence</option>
               </Select>
-              {f.plan === 'custom' ? (
+              {f.plan === 'custom' || f.plan === 'demo' ? (
                 <Input aria-label="Days" className="w-24" type="number" min={1} max={3650} placeholder="Days" value={f.custom} onChange={(e) => setF({ ...f, custom: e.target.value })} />
               ) : (
                 <span />
               )}
             </div>
+            <p className="text-xs text-muted-foreground">Licences left: <strong>{quota.data?.remaining ?? '—'}</strong> (2 / 30 days use 1, demo is free).</p>
             <p className="text-xs text-muted-foreground">After expiry the client cannot trade (paper or live) or connect a broker.</p>
           </div>
           <DialogFooter>

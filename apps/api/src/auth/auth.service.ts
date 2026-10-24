@@ -51,6 +51,7 @@ export class AuthService {
           name: dto.name,
           mobile: dto.mobile ?? null,
           role: 'FOLLOWER',
+          demo: true, // self sign-ups start in demo (paper only) until the master gives a licence
         },
       });
       await tx.emailVerificationToken.create({

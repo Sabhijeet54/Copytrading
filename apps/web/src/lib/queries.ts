@@ -197,6 +197,7 @@ export interface CreateUserInput {
   password: string;
   role: 'ADMIN' | 'SUB_ADMIN' | 'MASTER' | 'FOLLOWER';
   licenceDays?: number;
+  demo?: boolean;
 }
 
 export function useAdminUserMutations() {
@@ -210,7 +211,7 @@ export function useAdminUserMutations() {
       onSuccess: done,
     }),
     licence: useMutation({
-      mutationFn: ({ id, days, extend }: { id: string; days: number; extend: boolean }) => api(`/admin/users/${id}/licence`, { method: 'POST', body: { days, extend } }),
+      mutationFn: ({ id, days, extend, demo }: { id: string; days: number; extend: boolean; demo?: boolean }) => api(`/admin/users/${id}/licence`, { method: 'POST', body: { days, extend, demo } }),
       onSuccess: done,
     }),
     revoke: useMutation({ mutationFn: (id: string) => api(`/admin/users/${id}/licence/revoke`, { method: 'POST' }), onSuccess: done }),
