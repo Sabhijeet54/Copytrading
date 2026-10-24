@@ -72,7 +72,7 @@ export class TokenService {
   }
 
   /** Starts a brand-new session family (login / register). */
-  async issueForNewSession(user: Pick<User, 'id' | 'role'>, client: ClientInfo): Promise<IssuedTokens> {
+  async issueForNewSession(user: Pick<User, 'id' | 'role'>, client: ClientInfo, impersonatorUserId: string | null = null): Promise<IssuedTokens> {
     const refreshToken = generateToken(48);
     const refreshExpiresAt = this.refreshExpiry();
     const session = await this.prisma.session.create({
@@ -80,7 +80,8 @@ export class TokenService {
         userId: user.id,
         familyId: randomUUID(),
         tokenHash: sha256(refreshToken),
-        expiresAt: refreshExpiresAt,
+        expiresAt: impersonatorUserId ? new Date(Math.min(refreshExpiresAt.getTime(), Date.now() + 8 * 3_600_000)) : refreshExpiresAt,
+        impersonatorUserId,
         ip: client.ip ?? null,
         userAgent: client.userAgent?.slice(0, 512) ?? null,
       },
@@ -120,7 +121,8 @@ export class TokenService {
           userId: existing.userId,
           familyId: existing.familyId,
           tokenHash: sha256(refreshToken),
-          expiresAt: refreshExpiresAt,
+          expiresAt: existing.impersonatorUserId ? existing.expiresAt : refreshExpiresAt,
+          impersonatorUserId: existing.impersonatorUserId,
           ip: client.ip ?? null,
           userAgent: client.userAgent?.slice(0, 512) ?? null,
         },

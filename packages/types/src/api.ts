@@ -48,6 +48,8 @@ export interface AuthUser {
   role: Role;
   /** Set for a master's sub-admin (works inside that master's workspace). */
   masterId?: string | null;
+  /** Set while a master is viewing this client's panel. */
+  impersonatedBy?: string | null;
   status: UserStatus;
   emailVerified: boolean;
   createdAt: IsoDate;

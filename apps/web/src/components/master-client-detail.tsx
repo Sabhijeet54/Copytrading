@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { LiveAccountCard, PaperPositionsCard, Pnl, Tabs } from '@/components/live-account';
 import { PageHeader } from '@/components/page-header';
+import { OpenClientPanelButton } from '@/components/impersonate';
 import { StatCard } from '@/components/stat-card';
 import { StatusBadge } from '@/components/status-badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -76,7 +77,7 @@ export function ClientDetail({ userId }: { userId: string }) {
 
   return (
     <>
-      <PageHeader title={p.name} description={`${p.email}${p.mobile ? ` · ${p.mobile}` : ''} · client since ${formatDateTime(p.createdAt)}`} />
+      <PageHeader title={p.name} description={`${p.email}${p.mobile ? ` · ${p.mobile}` : ''} · client since ${formatDateTime(p.createdAt)}`} actions={<OpenClientPanelButton userId={p.id} name={p.name} />} />
       <div className="grid gap-4">
         <div className="fox-tiles grid grid-cols-2 gap-3 lg:grid-cols-4">
           <StatCard label="Today's P&L" value={<Pnl value={d.todayPnl} />} hint="Your strategies only" />

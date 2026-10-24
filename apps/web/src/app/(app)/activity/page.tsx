@@ -6,15 +6,7 @@ import { Pagination } from '@/components/pagination';
 import { Card } from '@/components/ui/card';
 import { formatDateTime, humanize } from '@/lib/format';
 import { type ActivityRow, useActivity } from '@/lib/trading';
-import { cn } from '@/lib/utils';
 
-const SIDE_STYLE: Record<ActivityRow['side'], string> = {
-  YOU: 'bg-sky-100 text-sky-800',
-  ADMIN: 'bg-violet-100 text-violet-800',
-  MASTER: 'bg-amber-100 text-amber-800',
-  CLIENT: 'bg-muted text-foreground',
-  SYSTEM: 'bg-muted text-muted-foreground',
-};
 
 /** Plain-language description of one audit entry. */
 function describe(r: ActivityRow): string {
@@ -47,9 +39,9 @@ function describe(r: ActivityRow): string {
       if (m.manualExit) return `Trade exited manually${on}`;
       return `Auto trading stopped${on}`;
     case 'ADMIN_STOPPED_COPY':
-      return `Auto trading stopped by admin${on}${m.reason ? ` (${String(m.reason)})` : ''}`;
+      return `Auto trading stopped${on}${m.reason ? ` (${String(m.reason)})` : ''}`;
     case 'ADMIN_RESUMED_COPY':
-      return `Auto trading resumed by admin${on}`;
+      return `Auto trading resumed${on}`;
     case 'ADMIN_DISABLED_USER':
       return 'Account disabled';
     case 'ADMIN_ENABLED_USER':
@@ -61,12 +53,12 @@ function describe(r: ActivityRow): string {
     case 'RISK_LIMIT_HIT':
       return `Risk limit hit${on}`;
     case 'KILL_SWITCH_ACTIVATED':
-      return 'Emergency stop by admin';
+      return 'Emergency stop';
     case 'PROFILE_UPDATED': {
       if (m.tradingMode) return `Trading mode set to ${String(m.tradingMode)}${m.paperClosed ? ` (${String(m.paperClosed)} paper trades closed)` : ''}`;
       if (m.brokerApi) return `Broker API details updated — ${String(m.brokerApi)}${Array.isArray(m.changed) && m.changed.length ? ` (${(m.changed as string[]).join(', ')})` : ''}`;
       if (m.licenceDays) return `Licence assigned — ${String(m.licenceDays)} days`;
-      if (m.createdByAdmin) return 'Account created by admin';
+      if (m.createdByAdmin) return 'Account created';
       if (r.on) return `Strategy settings changed${on}`;
       return 'Profile updated';
     }
@@ -81,7 +73,7 @@ export default function ActivityPage() {
   const rows = q.data?.items ?? [];
   return (
     <>
-      <PageHeader title="Activity log" description="Last 24 hours: every change on your account — who made it (you, admin, master or system) — and your logins." />
+      <PageHeader title="Activity log" description="Last 24 hours: every change on your account and your logins." />
       <Card className="overflow-hidden">
         {q.isLoading ? (
           <p className="p-4 text-sm text-muted-foreground">Loading…</p>
@@ -98,7 +90,6 @@ export default function ActivityPage() {
                     {r.ip ? ` · IP ${r.ip}` : ''}
                   </p>
                 </div>
-                <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', SIDE_STYLE[r.side])}>by {r.by}</span>
               </div>
             ))}
           </div>

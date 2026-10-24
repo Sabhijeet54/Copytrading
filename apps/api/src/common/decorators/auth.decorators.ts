@@ -25,6 +25,8 @@ export interface RequestUser {
   sessionId: string;
   /** Master's sub-admin: the sub-admin's own id while `id` is the master it works for. */
   actorId?: string;
+  /** Master (or master's sub-admin) who opened this client's panel. */
+  impersonatorId?: string;
 }
 
 export type AuthenticatedRequest = Request & { user?: RequestUser; requestId?: string };

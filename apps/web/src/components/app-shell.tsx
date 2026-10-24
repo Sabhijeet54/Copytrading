@@ -35,10 +35,11 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import type { AuthUser, Role } from '@ctp/types';
 import { useRealtime } from '@/components/realtime';
+import { ImpersonationBanner } from '@/components/impersonate';
 import { Button } from '@/components/ui/button';
 import { humanize } from '@/lib/format';
 import { useLogout, useMyBrokerAccounts } from '@/lib/queries';
-import { useFeedStatus } from '@/lib/trading';
+import { useFeedStatus, useMasterLicenceQuota } from '@/lib/trading';
 import { cn } from '@/lib/utils';
 
 interface NavItem {
@@ -212,6 +213,7 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
 
   const isSubAdmin = !!(user as AuthUser & { isSubAdmin?: boolean }).isSubAdmin;
   const [profileOpen, setProfileOpen] = useState(false);
+  const quota = useMasterLicenceQuota(user.role === 'MASTER');
   const sections = (MENUS[user.role === 'SUB_ADMIN' ? 'ADMIN' : user.role] ?? []).map((sec) =>
     isSubAdmin ? { ...sec, items: sec.items.filter((i) => i.href !== '/broker' && i.href !== '/master/sub-admins') } : sec,
   );
@@ -245,6 +247,18 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
               <Dot tone={status.feed === 'LIVE' ? 'ok' : status.feed === 'CONNECTING' ? 'warn' : status.feed === 'DOWN' ? 'bad' : 'idle'} />
               {!mini ? <span className="font-semibold tracking-wide">{status.feed}</span> : null}
             </span>
+          ) : null}
+          {user.role === 'MASTER' && quota.data ? (
+            <Link href="/master/clients" className="flex items-center gap-2 hover:text-sidebar-active" title="Licences you can still give to clients (set by admin)">
+              <KeyRound className="size-3.5 shrink-0 text-primary" />
+              {!mini ? (
+                <span>
+                  Licences left: <span className="font-semibold">{quota.data.remaining}</span>
+                </span>
+              ) : (
+                <span className="font-semibold">{quota.data.remaining}</span>
+              )}
+            </Link>
           ) : null}
         </div>
       ) : null}
@@ -365,6 +379,7 @@ export function AppShell({ user, children }: { user: AuthUser; children: React.R
             </div>
           </div>
         </header>
+        {user.impersonatedBy ? <ImpersonationBanner clientName={user.name} by={user.impersonatedBy} /> : null}
         <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</main>
       </div>
     </div>

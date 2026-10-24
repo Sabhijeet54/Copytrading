@@ -144,7 +144,7 @@ export class FollowerController {
     };
     const [total, rows] = await Promise.all([
       this.prisma.auditLog.count({ where }),
-      this.prisma.auditLog.findMany({ where, include: { actor: { select: { id: true, name: true, role: true } } }, orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }),
+      this.prisma.auditLog.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }),
     ]);
     const subName = new Map(subs.map((x) => [x.id, x.strategy.name]));
     const accName = new Map([...accounts.map((x) => [x.id, x.broker] as const), ...apiCfgs.map((x) => [x.id, x.broker] as const)]);
@@ -153,14 +153,10 @@ export class FollowerController {
       page,
       pageSize,
       items: rows.map((r) => {
-        const by = !r.actor ? 'System' : r.actor.id === user.id ? 'You' : r.actor.role === 'MASTER' ? `Master · ${r.actor.name}` : r.actor.role === 'FOLLOWER' ? r.actor.name : `Admin · ${r.actor.name}`;
-        const side = !r.actor ? 'SYSTEM' : r.actor.id === user.id ? 'YOU' : r.actor.role === 'MASTER' ? 'MASTER' : r.actor.role === 'FOLLOWER' ? 'CLIENT' : 'ADMIN';
         return {
           id: r.id,
           at: r.createdAt.toISOString(),
           action: r.action,
-          by,
-          side,
           on: r.targetType === 'StrategyFollower' ? (subName.get(r.targetId ?? '') ?? 'Strategy') : r.targetType === 'BrokerAccount' || r.targetType === 'BrokerApiConfig' ? (accName.get(r.targetId ?? '') ?? 'Broker') : null,
           metadata: (r.metadata ?? null) as Record<string, unknown> | null,
           ip: r.ip,

@@ -36,7 +36,7 @@ export class AuthGuard implements CanActivate {
 
     const session = await this.prisma.session.findUnique({
       where: { id: payload.sid },
-      select: { revokedAt: true, expiresAt: true, userId: true, user: { select: { id: true, email: true, role: true, status: true, parentUserId: true, licenceExpiresAt: true } } },
+      select: { revokedAt: true, expiresAt: true, userId: true, impersonatorUserId: true, user: { select: { id: true, email: true, role: true, status: true, parentUserId: true, licenceExpiresAt: true } } },
     });
     if (!session || session.userId !== payload.sub || session.revokedAt || session.expiresAt.getTime() <= Date.now()) {
       throw new UnauthorizedException('Session expired');
@@ -62,7 +62,7 @@ export class AuthGuard implements CanActivate {
         throw new ForbiddenException('Your licence has expired — contact your master to renew it.');
       }
     }
-    req.user = { id: u.id, email: u.email, role: u.role, sessionId: payload.sid };
+    req.user = { id: u.id, email: u.email, role: u.role, sessionId: payload.sid, ...(session.impersonatorUserId ? { impersonatorId: session.impersonatorUserId } : {}) };
     return true;
   }
 }

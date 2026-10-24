@@ -620,8 +620,6 @@ export interface ActivityRow {
   id: string;
   at: string;
   action: string;
-  by: string;
-  side: 'YOU' | 'ADMIN' | 'MASTER' | 'CLIENT' | 'SYSTEM';
   on: string | null;
   metadata: Record<string, unknown> | null;
   ip: string | null;

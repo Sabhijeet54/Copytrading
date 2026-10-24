@@ -223,6 +223,32 @@ export class AuthService implements OnApplicationBootstrap {
     });
   }
 
+  /** Master (or master's sub-admin) → client session. The client must belong to that master. */
+  async impersonate(actorId: string, clientId: string, client: ClientInfo) {
+    const actor = await this.prisma.user.findUnique({ where: { id: actorId } });
+    if (!actor || actor.status !== 'ACTIVE') throw new UnauthorizedException('Not authenticated');
+    const masterId = actor.role === 'SUB_ADMIN' && actor.parentUserId ? actor.parentUserId : actor.role === 'MASTER' ? actor.id : null;
+    if (!masterId) throw new ForbiddenException('Only a master can open a client panel');
+    const target = await this.prisma.user.findUnique({ where: { id: clientId } });
+    if (!target || target.role !== 'FOLLOWER') throw new ForbiddenException('Client not found');
+    const mine =
+      target.parentUserId === masterId ||
+      (await this.prisma.strategyFollower.count({ where: { followerUserId: clientId, strategy: { masterUserId: masterId } } })) > 0;
+    if (!mine) throw new ForbiddenException('This client is not one of your clients');
+    if (target.status !== 'ACTIVE') throw new ForbiddenException('This client account is disabled');
+    const tokens = await this.tokens.issueForNewSession(target, client, actor.id);
+    await this.audit.log({ action: 'USER_LOGIN', actorUserId: actor.id, targetType: 'User', targetId: target.id, metadata: { impersonation: true, byMaster: actor.name }, client });
+    return { user: target, tokens };
+  }
+
+  async endImpersonation(sessionId: string, impersonatorId: string, client: ClientInfo) {
+    await this.prisma.session.updateMany({ where: { id: sessionId, revokedAt: null }, data: { revokedAt: new Date() } });
+    const back = await this.prisma.user.findUnique({ where: { id: impersonatorId } });
+    if (!back || back.status !== 'ACTIVE') throw new UnauthorizedException('Please sign in again');
+    const tokens = await this.tokens.issueForNewSession(back, client);
+    return { user: back, tokens };
+  }
+
   async getUser(userId: string): Promise<User> {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new UnauthorizedException('Not authenticated');

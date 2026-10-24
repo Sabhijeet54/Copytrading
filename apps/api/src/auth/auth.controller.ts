@@ -1,9 +1,9 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Inject, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, HttpCode, HttpStatus, Inject, Param, Post, Req, Res } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import type { AuthResponse, AuthUser } from '@ctp/types';
 import { clientInfo } from '../common/client-info';
-import { CurrentUser, Public, RequestUser } from '../common/decorators/auth.decorators';
+import { CurrentUser, Public, RequestUser, Roles } from '../common/decorators/auth.decorators';
 import { toAuthUser } from '../common/mappers';
 import { API_CONFIG, ApiConfig } from '../config/config.module';
 import { clearAuthCookies, REFRESH_COOKIE, setAuthCookies } from './auth-cookies';
@@ -71,7 +71,29 @@ export class AuthController {
 
   @Get('me')
   async me(@CurrentUser() user: RequestUser): Promise<AuthUser> {
-    return toAuthUser(await this.auth.getUser(user.id));
+    const u = toAuthUser(await this.auth.getUser(user.id));
+    if (user.impersonatorId) u.impersonatedBy = (await this.auth.getUser(user.impersonatorId).catch(() => null))?.name ?? 'Master';
+    return u;
+  }
+
+  /** Master (or master's sub-admin) opens a client's panel with full access ("login as client"). */
+  @Roles('MASTER')
+  @HttpCode(HttpStatus.OK)
+  @Post('impersonate/:userId')
+  async impersonate(@CurrentUser() user: RequestUser, @Param('userId') userId: string, @Req() req: Request, @Res({ passthrough: true }) res: Response): Promise<AuthResponse> {
+    const { user: client, tokens } = await this.auth.impersonate(user.actorId ?? user.id, userId, clientInfo(req));
+    setAuthCookies(res, this.config, tokens);
+    return { user: toAuthUser(client), accessTokenExpiresAt: tokens.accessTokenExpiresAt };
+  }
+
+  /** Back from a client's panel to the master's own session. */
+  @HttpCode(HttpStatus.OK)
+  @Post('impersonate-exit')
+  async impersonateExit(@CurrentUser() user: RequestUser, @Req() req: Request, @Res({ passthrough: true }) res: Response): Promise<AuthResponse> {
+    if (!user.impersonatorId) throw new ForbiddenException('Not viewing a client');
+    const { user: back, tokens } = await this.auth.endImpersonation(user.sessionId, user.impersonatorId, clientInfo(req));
+    setAuthCookies(res, this.config, tokens);
+    return { user: toAuthUser(back), accessTokenExpiresAt: tokens.accessTokenExpiresAt };
   }
 
   @Public()
