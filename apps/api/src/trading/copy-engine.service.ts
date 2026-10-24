@@ -285,8 +285,17 @@ export class CopyEngineService {
     const net = registry.clientNet(c.followerId, t.exchange, t.symbol, t.productType);
     if (x.closing) {
       // Exit mirroring: close (part of) the follower's own copy position, never open a new one.
-      if (net === 0 || Math.sign(net) === Math.sign(x.signed)) return skip('No open copy position to exit');
-      if (x.fullExit) qty = Math.abs(net);
+      if (paperAccountId) {
+        // Trade opened in PAPER (client switched to LIVE since): exit it in paper, by the paper quantity —
+        // even if the live copy book says nothing is open.
+        if (x.fullExit) qty = paperQty;
+        else {
+          const strat = registry.strategy(x.strategyId) ?? { masterCapital: 0, maxOrderValue: null, maxQuantityPerOrder: null };
+          const calc = computeCopyQuantity(strat, { ...s, maxLots: null, maxQuantity: null, maxTradeValue: null }, x.masterQty, null, x.lotSize).qty;
+          qty = Math.min(calc || paperQty, paperQty);
+        }
+      } else if (net === 0 || Math.sign(net) === Math.sign(x.signed)) return skip('No open copy position to exit');
+      else if (x.fullExit) qty = Math.abs(net);
       else {
         const strat = registry.strategy(x.strategyId) ?? { masterCapital: 0, maxOrderValue: null, maxQuantityPerOrder: null };
         const calc = computeCopyQuantity(strat, { ...s, maxLots: null, maxQuantity: null, maxTradeValue: null }, x.masterQty, null, x.lotSize).qty;
@@ -308,7 +317,9 @@ export class CopyEngineService {
     if (sim) {
       if (paperAccountId && paperQty) qty = Math.min(qty, paperQty);
       const fillPrice = x.price ?? 0;
-      registry.applyClientFill(c.followerId, t.exchange, t.symbol, t.productType, t.side === 'BUY' ? qty : -qty);
+      // Keep the copy book in step without pushing it past zero (a paper exit after a LIVE switch).
+      const bookQty = paperAccountId ? Math.min(qty, Math.abs(net)) : qty;
+      if (bookQty) registry.applyClientFill(c.followerId, t.exchange, t.symbol, t.productType, t.side === 'BUY' ? bookQty : -bookQty);
       const latencyMs = Math.round(performance.now() - x.t0);
       return { ...base, qty, status: 'FILLED', fillPrice, latencyMs, attempts: 1 };
     }

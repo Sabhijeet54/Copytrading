@@ -102,7 +102,9 @@ export class FollowerController {
     if (dto.mode === 'LIVE') {
       for (const a of accounts) {
         if (!this.trading.isSimulated(a)) continue;
-        const r = await this.risk.squareOffAccount(a, { intradayOnly: false }).catch(() => ({ orders: 0 }));
+        const r = await this.risk.squareOffAccount(a, { intradayOnly: false }).catch((e: Error) => {
+          throw new BadRequestException(`Could not close your open paper trades (${e.message}) — try again.`);
+        });
         paperClosed += r.orders;
       }
     }
