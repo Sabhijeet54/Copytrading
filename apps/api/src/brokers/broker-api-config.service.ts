@@ -168,7 +168,7 @@ export class BrokerApiConfigService implements OnApplicationBootstrap, OnModuleD
   }
 
   private async row(userId: string, broker: BrokerName): Promise<BrokerApiConfig | null> {
-    return this.prisma.brokerApiConfig.findUnique({ where: { userId_broker: { userId, broker } } });
+    return this.prisma?.brokerApiConfig.findUnique({ where: { userId_broker: { userId, broker } } });
   }
 
   // ------------------------------------------------------------ CRUD

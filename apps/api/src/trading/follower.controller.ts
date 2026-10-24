@@ -169,7 +169,7 @@ export class FollowerController {
   async marketplace(@CurrentUser() user: RequestUser) {
     const [rows, mine] = await Promise.all([
       this.prisma.strategy.findMany({
-        where: { status: { in: ['ACTIVE', 'PAUSED'] } },
+        where: { status: { in: ['ACTIVE', 'PAUSED', 'DRAFT'] } },
         include: { master: { select: { name: true } }, _count: { select: { followers: true } } },
         orderBy: { createdAt: 'desc' },
       }),
@@ -208,7 +208,7 @@ export class FollowerController {
     const mine = (await this.prisma.strategyFollower.findMany({ where: { followerUserId: user.id } })).filter((m) => !isRemoved(m));
     if (!mine.length) return [];
     const rows = await this.prisma.strategy.findMany({
-      where: { id: { in: mine.map((m) => m.strategyId) }, status: { in: ['ACTIVE', 'PAUSED'] } },
+      where: { id: { in: mine.map((m) => m.strategyId) }, status: { in: ['ACTIVE', 'PAUSED', 'DRAFT'] } },
       include: { master: { select: { name: true } }, _count: { select: { followers: true } } },
       orderBy: { createdAt: 'desc' },
     });
