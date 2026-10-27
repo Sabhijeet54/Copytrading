@@ -117,11 +117,7 @@ export class BrokersController {
 
   @Get('accounts')
   async myAccounts(@CurrentUser() user: RequestUser): Promise<BrokerAccountView[]> {
-    // Clients: real broker connections only — the internal paper ledger (MOCK) is not a broker connection.
-    const accounts = await this.prisma.brokerAccount.findMany({
-      where: { userId: user.id, broker: { notIn: user.role !== 'FOLLOWER' ? ['ZERODHA'] : ['MOCK'] } },
-      orderBy: { createdAt: 'asc' },
-    });
+    const accounts = await this.prisma.brokerAccount.findMany({ where: { userId: user.id, ...(user.role !== 'FOLLOWER' ? { broker: { notIn: ['ZERODHA'] } } : {}) }, orderBy: { createdAt: 'asc' } });
     return accounts.map(toBrokerAccountView);
   }
 
@@ -272,8 +268,7 @@ export class BrokersController {
   /** Runs a broker callback and always redirects the browser back to the web app with a result. */
   private async handleCallback(broker: BrokerName, state: string | undefined, res: Response, work: (userId: string) => Promise<unknown>) {
     const slug = SLUG_OF[broker] ?? 'angel-one';
-    // Broker login lands back on the Broker connection section (the only place broker connections are managed).
-    const back = new URL('/broker', this.config.WEB_ORIGIN);
+    const back = new URL('/dashboard', this.config.WEB_ORIGIN);
     back.searchParams.set('broker', slug);
     let userId: string | undefined;
     try {

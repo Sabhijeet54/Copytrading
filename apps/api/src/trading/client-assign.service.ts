@@ -6,7 +6,6 @@ import { AccountEvents } from '../realtime/account-events';
 import type { AssignClientDto } from './trading.dto';
 import { PositionResizeService, type ResizeResult } from './position-resize.service';
 import { isRemoved, REMOVED_REASON } from './follower-access';
-import { TradingService } from './trading.service';
 
 /**
  * Master / admin assigns a client to a strategy (instead of the client subscribing himself).
@@ -20,7 +19,6 @@ export class ClientAssignService {
     private readonly audit: AuditService,
     private readonly accountEvents: AccountEvents,
     private readonly resizer: PositionResizeService,
-    private readonly trading: TradingService,
   ) {}
 
   async assign(strategy: Strategy, dto: AssignClientDto, actorUserId: string) {
@@ -31,12 +29,9 @@ export class ClientAssignService {
     if (client.status !== 'ACTIVE') throw new BadRequestException('This client account is not active');
 
     const accounts = await this.prisma.brokerAccount.findMany({ where: { userId: client.id, mode: 'TRADING' }, orderBy: { createdAt: 'asc' } });
-    const real = accounts.filter((a) => a.broker !== 'MOCK');
-    // No broker needed: without one the client's internal paper ledger account is used (paper trading, or LIVE
-    // trades recorded in the software and not sent until a broker is connected).
     const account = dto.brokerAccountId
       ? accounts.find((a) => a.id === dto.brokerAccountId)
-      : (real.find((a) => a.status === 'CONNECTED') ?? real[0] ?? (await this.trading.ensureLedgerAccount(client.id)));
+      : (accounts.find((a) => a.status === 'CONNECTED') ?? accounts.find((a) => a.isPaper || a.broker === 'MOCK') ?? accounts[0]);
     if (dto.brokerAccountId && !account) throw new BadRequestException('That broker account does not belong to this client');
 
     const existing = await this.prisma.strategyFollower.findUnique({ where: { strategyId_followerUserId: { strategyId: strategy.id, followerUserId: client.id } } });
@@ -49,8 +44,7 @@ export class ClientAssignService {
     if (mode === 'CAPITAL_PERCENTAGE' && !dto.allocationPercent) throw new BadRequestException('Allocation % is required');
     if (mode === 'PROPORTIONAL' && !dto.allocationAmount) throw new BadRequestException('Capital amount is required');
 
-    // Activating a strategy never requires a broker connection (see ClientRegistryService for routing).
-    const canStart = Boolean(dto.startCopy && account);
+    const canStart = Boolean(dto.startCopy && account && (account.status === 'CONNECTED' || account.isPaper || account.broker === 'MOCK'));
     const data = {
       brokerAccountId: account?.id ?? null,
       allocationMode: mode,
@@ -94,7 +88,7 @@ export class ClientAssignService {
     return {
       follower: row,
       resized,
-      warning: null as string | null,
+      warning: dto.startCopy && !canStart ? 'Assigned with copy OFF — the client has no connected broker account yet.' : null,
     };
   }
 

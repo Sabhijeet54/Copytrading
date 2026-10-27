@@ -115,8 +115,7 @@ export class ExitPositionDto {
 }
 
 export class FollowDto {
-  /** Optional: without it the client's broker account (or the internal paper ledger) is used. */
-  @IsOptional() @IsString() brokerAccountId?: string;
+  @IsString() brokerAccountId!: string;
   /** Resize trades already booked (still open) to the new allocation. Default true. */
   @IsOptional() @IsBoolean() applyToOpenTrades?: boolean;
   @IsEnum({ FIXED_QUANTITY: 'FIXED_QUANTITY', CAPITAL_PERCENTAGE: 'CAPITAL_PERCENTAGE', PROPORTIONAL: 'PROPORTIONAL' })

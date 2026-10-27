@@ -48,7 +48,7 @@ export function CopyOrdersTable({ rows, empty, showStrategy = true }: { rows: Co
                 </TableCell>
                 <TableCell className="text-right tabular-nums">{c.filledQuantity}</TableCell>
                 <TableCell className="text-right tabular-nums">{formatINR(c.averagePrice)}</TableCell>
-                <TableCell>{c.errorCode === 'MISSED' || c.errorCode === 'NOT_SENT' ? <StatusBadge value="WARNING" label="Not sent · no broker" /> : c.errorCode === 'SKIPPED' ? <StatusBadge value="CANCELLED" label="Skipped" /> : <StatusBadge value={c.status} />}</TableCell>
+                <TableCell>{c.errorCode === 'MISSED' ? <StatusBadge value="WARNING" label="Missed · paper" /> : <StatusBadge value={c.status} />}</TableCell>
                 <TableCell className="max-w-64 truncate text-xs text-muted-foreground" title={c.errorMessage ?? ''}>
                   {c.errorMessage ?? (c.brokerOrderId ? `Order ${c.brokerOrderId}` : '')}
                 </TableCell>

@@ -43,70 +43,9 @@ export interface StrategyDaySummary {
   strategyStatus: string;
   copyStatus: 'ON' | 'OFF' | 'PAUSED';
   allocation: string;
-  /** Software-level P&L (strategy trades at strategy prices, regardless of broker execution). */
   todayPnl: number;
   todayTrades: number;
-  /** Actual broker-executed P&L (Demat fills, LIVE only). Never includes paper or not-executed trades. */
-  brokerPnl: number;
 }
-
-/** Broker side of a software trade (from the linked entry order). */
-export type ExecutionState = 'PAPER' | 'EXECUTED' | 'PARTIAL' | 'PENDING' | 'NOT_EXECUTED';
-
-/** One software-generated strategy trade (internal trade ledger). */
-export interface LedgerTrade {
-  /** Strategy Trade ID = id of the entry copy order created for this strategy signal (unique per signal × client). */
-  tradeId: string;
-  /** Short display form of tradeId. */
-  tradeRef: string;
-  signalId: string;
-  followerId: string;
-  strategyName: string;
-  mode: 'PAPER' | 'LIVE';
-  exchange: string;
-  symbol: string;
-  productType: string;
-  side: 'BUY' | 'SELL';
-  quantity: number;
-  lots: number | null;
-  openQuantity: number;
-  entryPrice: number;
-  entryAt: string;
-  carried: boolean;
-  exitPrice: number | null;
-  exitAt: string | null;
-  ltp: number | null;
-  /** Software status: from the strategy signal (and exits done in the software), never from the broker. */
-  status: 'OPEN' | 'CLOSED';
-  realizedPnl: number;
-  unrealizedPnl: number;
-  pnl: number;
-  /** Broker execution of the entry order — details live in the Orders section. */
-  execution: ExecutionState;
-}
-
-export interface LedgerSummary {
-  trades: number;
-  open: number;
-  closed: number;
-  realizedPnl: number;
-  unrealizedPnl: number;
-  totalPnl: number;
-}
-
-/** Not a strategy trade for this client (risk-rule / licence skip) — kept in Orders only. */
-export const isLedgerEligible = (o: { errorCode: string | null; quantity: number; isExit: boolean; mirrored: boolean }) =>
-  !o.isExit && !o.mirrored && o.quantity > 0 && o.errorCode !== 'SKIPPED';
-
-export function executionOf(o: { isPaper: boolean; status: string; filledQuantity: number; quantity: number }): ExecutionState {
-  if (o.isPaper) return 'PAPER';
-  if (o.filledQuantity > 0) return o.filledQuantity >= o.quantity || o.status === 'FILLED' ? 'EXECUTED' : 'PARTIAL';
-  if (['PENDING', 'SUBMITTED', 'OPEN', 'UNKNOWN', 'PARTIALLY_FILLED'].includes(o.status)) return 'PENDING';
-  return 'NOT_EXECUTED';
-}
-
-export const tradeRef = (id: string) => `T-${id.slice(-8).toUpperCase()}`;
-const r2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
  * Today's (IST trading day) P&L of a client, per strategy subscription.
@@ -122,33 +61,111 @@ export class ClientSummaryService {
     private readonly feed: MarketFeedService,
   ) {}
 
-  /**
-   * `masterUserId` set = only subscriptions to that master's strategies. Removed subscriptions are left out.
-   * todayPnl = SOFTWARE-level P&L from the internal trade ledger (every strategy trade, executed or not);
-   * brokerPnl = actual broker-executed (Demat) P&L from real fills only. The two are never mixed.
-   */
-  async today(userId: string, masterUserId?: string): Promise<{ todayPnl: number; brokerPnl: number; software: LedgerSummary; strategies: StrategyDaySummary[] }> {
+  /** `masterUserId` set = only subscriptions to that master's strategies. Removed subscriptions are left out. */
+  async today(userId: string, masterUserId?: string): Promise<{ todayPnl: number; strategies: StrategyDaySummary[] }> {
+    const since = startOfTradingDayIST();
     const subsAll = await this.prisma.strategyFollower.findMany({
       where: { followerUserId: userId, ...(masterUserId ? { strategy: { masterUserId } } : {}) },
       include: { strategy: { select: { name: true, status: true } } },
       orderBy: { createdAt: 'asc' },
     });
     const subs = subsAll.filter((s) => !isRemoved(s));
-    const [led, book] = await Promise.all([
-      this.ledger(userId, masterUserId),
-      this.tradeBook(userId, { brokerOnly: true, masterUserId }).catch((err) => {
-        this.logger.error(`broker trade book failed for ${userId}: ${(err as Error).stack ?? err}`);
-        return { totalPnl: 0, rejectedPnl: 0, rows: [] as { followerId: string; pnl: number }[] };
-      }),
-    ]);
-    const swPnl = new Map<string, number>();
-    const swTrades = new Map<string, number>();
-    for (const t of led.trades) {
-      swPnl.set(t.followerId, (swPnl.get(t.followerId) ?? 0) + t.pnl);
-      swTrades.set(t.followerId, (swTrades.get(t.followerId) ?? 0) + 1);
+    const orders = await this.prisma.copyOrder.findMany({
+      where: { followerUserId: userId, createdAt: { gte: since }, filledQuantity: { gt: 0 }, strategyFollowerId: { in: subsAll.map((s) => s.id) } },
+      select: {
+        strategyFollowerId: true,
+        exchange: true,
+        symbol: true,
+        side: true,
+        filledQuantity: true,
+        averagePrice: true,
+        masterTrade: { select: { quantity: true, filledQuantity: true, rawPayload: true } },
+      },
+    });
+    const subById = new Map(subsAll.map((x) => [x.id, x]));
+    // Per subscription & instrument: cash flow and net quantity.
+    const book = new Map<string, Map<string, { cash: number; net: number; last: number }>>();
+    const trades = new Map<string, number>();
+    for (const o of orders) {
+      const px = o.averagePrice == null ? 0 : Number(o.averagePrice);
+      const sign = o.side === 'BUY' ? 1 : -1;
+      const inst = `${o.exchange}:${o.symbol}`;
+      const m = book.get(o.strategyFollowerId) ?? new Map();
+      const cur = m.get(inst) ?? { cash: 0, net: 0, last: px };
+      const q = displayQty(subById.get(o.strategyFollowerId), o.masterTrade, o.filledQuantity);
+      cur.cash -= sign * q * px;
+      cur.net += sign * q;
+      cur.last = px || cur.last;
+      m.set(inst, cur);
+      book.set(o.strategyFollowerId, m);
+      trades.set(o.strategyFollowerId, (trades.get(o.strategyFollowerId) ?? 0) + 1);
     }
-    const brPnl = new Map<string, number>();
-    for (const r of book.rows) brPnl.set(r.followerId, (brPnl.get(r.followerId) ?? 0) + r.pnl);
+    // Lot-multiplier resizes of open trades (PositionResizeService): extra bought / sold quantity per subscription.
+    const adjusts = await this.prisma.auditLog.findMany({
+      where: { action: 'PROFILE_UPDATED', targetType: 'StrategyFollower', targetId: { in: subsAll.map((x) => x.id) }, createdAt: { gte: since } },
+      select: { targetId: true, metadata: true },
+    });
+    for (const a of adjusts) {
+      const m = a.metadata as { manualAdjust?: boolean; exchange?: string; symbol?: string; side?: string; quantity?: number; price?: number | null } | null;
+      // Display uses the CURRENT multiplier for every trade (displayQty), so real resize orders are not added again.
+      if (DISPLAY_SCALED || !m?.manualAdjust || !m.exchange || !m.symbol || !m.quantity || !a.targetId) continue;
+      const inst = `${m.exchange}:${m.symbol}`;
+      const sign = m.side === 'SELL' ? -1 : 1;
+      const fm = book.get(a.targetId) ?? new Map<string, { cash: number; net: number; last: number }>();
+      const px = m.price ?? this.prices.get(instrumentKey(m.exchange, m.symbol)) ?? fm.get(inst)?.last ?? 0;
+      const cur = fm.get(inst) ?? { cash: 0, net: 0, last: px };
+      cur.cash -= sign * m.quantity * px;
+      cur.net += sign * m.quantity;
+      fm.set(inst, cur);
+      book.set(a.targetId, fm);
+    }
+    // Exits done outside the copy engine (client / master "Exit", exit-all, square-off): close the copied net
+    // quantity at the exit price, so a closed position stops moving with the LTP.
+    if (book.size) {
+      const accounts = await this.prisma.brokerAccount.findMany({ where: { userId, mode: 'TRADING' }, select: { id: true } });
+      const exits = accounts.length
+        ? await this.prisma.auditLog.findMany({
+            where: { action: 'COPY_STOPPED', targetType: 'BrokerAccount', targetId: { in: accounts.map((a) => a.id) }, createdAt: { gte: since } },
+            select: { metadata: true },
+            orderBy: { createdAt: 'asc' },
+          })
+        : [];
+      for (const e of exits) {
+        const m = e.metadata as { manualExit?: boolean; exchange?: string; symbol?: string; side?: string; quantity?: number; price?: number | null } | null;
+        if (!m?.manualExit || !m.exchange || !m.symbol || !m.quantity) continue;
+        const inst = `${m.exchange}:${m.symbol}`;
+        const exitSign = m.side === 'BUY' ? 1 : -1; // SELL closes a long (net > 0)
+        let left = m.quantity;
+        for (const fm of book.values()) {
+          const cur = fm.get(inst);
+          if (!cur || left <= 0 || cur.net === 0 || Math.sign(cur.net) === exitSign) continue;
+          const q = Math.min(left, Math.abs(cur.net));
+          const px = m.price ?? this.prices.get(instrumentKey(m.exchange, m.symbol)) ?? cur.last;
+          cur.cash -= exitSign * q * px;
+          cur.net += exitSign * q;
+          left -= q;
+        }
+      }
+    }
+    const pnlOf = (followerId: string) => {
+      let pnl = 0;
+      for (const [inst, v] of book.get(followerId) ?? []) {
+        const [ex, sym] = inst.split(':') as [string, string];
+        if (v.net) this.feed.ensure(ex as never, sym);
+        const ltp = this.prices.get(instrumentKey(ex, sym)) ?? v.last;
+        pnl += v.cash + v.net * ltp;
+      }
+      return Math.round(pnl * 100) / 100;
+    };
+    // Same numbers as the trade book (current lot size, manual exits closed at the full shown quantity).
+    let tbPnl: Map<string, number> | null = new Map<string, number>();
+    try {
+      const tb = await this.tradeBook(userId);
+      for (const r of tb.rows) if (!r.rejected) tbPnl.set(r.followerId, (tbPnl.get(r.followerId) ?? 0) + r.pnl);
+    } catch (err) {
+      this.logger.error(`tradeBook failed for ${userId}: ${(err as Error).stack ?? err}`);
+      tbPnl = null;
+    }
     const strategies = subs.map((s) => ({
       followerId: s.id,
       strategyId: s.strategyId,
@@ -156,159 +173,10 @@ export class ClientSummaryService {
       strategyStatus: s.strategy.status,
       copyStatus: s.copyStatus,
       allocation: allocationLabel(s),
-      todayPnl: r2(swPnl.get(s.id) ?? 0),
-      todayTrades: swTrades.get(s.id) ?? 0,
-      brokerPnl: r2(brPnl.get(s.id) ?? 0),
+      todayPnl: tbPnl ? Math.round((tbPnl.get(s.id) ?? 0) * 100) / 100 : pnlOf(s.id),
+      todayTrades: trades.get(s.id) ?? 0,
     }));
-    return {
-      todayPnl: led.summary.totalPnl,
-      brokerPnl: r2(strategies.reduce((a, x) => a + x.brokerPnl, 0)),
-      software: led.summary,
-      strategies,
-    };
-  }
-
-  /**
-   * INTERNAL TRADE LEDGER — the software's own record of every valid strategy-generated trade of a client,
-   * independent of what the broker did with the order.
-   *
-   * One trade per (strategy entry signal × client), identified by its entry order row (Strategy Trade ID). The
-   * entry row is written for every follower that was due the trade: paper fill, live order sent, live order
-   * rejected / failed by the broker, or live trade NOT SENT because no valid broker connection was available.
-   * Rows skipped by the client's own risk rules (segment, max trades, loss limit, quantity 0) are not trades.
-   *
-   * Software price / status come from the strategy signal (entry / exit price, open / closed), so a broker
-   * rejection never erases the trade or its performance. Exits done in the software for a position that is
-   * really held (exit-all, square-off, loss limit) close the trade at that exit price.
-   * Shown for today: entered today, still open, or exited today.
-   */
-  async ledger(userId: string, masterUserId?: string): Promise<{ trades: LedgerTrade[]; summary: LedgerSummary; exitLinks: Map<string, string> }> {
-    const since = startOfTradingDayIST();
-    const lookback = new Date(since.getTime() - 10 * 86_400_000);
-    const subs = (
-      await this.prisma.strategyFollower.findMany({
-        where: { followerUserId: userId, ...(masterUserId ? { strategy: { masterUserId } } : {}) },
-        include: { strategy: { select: { name: true } } },
-      })
-    ).filter((x) => !isRemoved(x));
-    const empty = { trades: [], summary: { trades: 0, open: 0, closed: 0, realizedPnl: 0, unrealizedPnl: 0, totalPnl: 0 }, exitLinks: new Map<string, string>() };
-    if (!subs.length) return empty;
-    const subById = new Map(subs.map((x) => [x.id, x]));
-    const orders = await this.prisma.copyOrder.findMany({
-      where: { followerUserId: userId, createdAt: { gte: lookback }, strategyFollowerId: { in: subs.map((x) => x.id) }, mirrored: false },
-      include: { masterTrade: true },
-      orderBy: { createdAt: 'asc' },
-    });
-    const accountIds = [...new Set(orders.map((o) => o.brokerAccountId))];
-    const manual = accountIds.length
-      ? (
-          await this.prisma.auditLog.findMany({
-            where: { action: 'COPY_STOPPED', targetType: 'BrokerAccount', targetId: { in: accountIds }, createdAt: { gte: lookback } },
-            select: { targetId: true, metadata: true, createdAt: true },
-            orderBy: { createdAt: 'asc' },
-          })
-        )
-          .map((a) => ({ accountId: a.targetId, at: a.createdAt.getTime(), m: a.metadata as { manualExit?: boolean; exchange?: string; symbol?: string; productType?: string; side?: string; price?: number | null } | null }))
-          .filter((e) => e.m?.manualExit && e.m.exchange && e.m.symbol)
-      : [];
-    const N = (v: unknown) => (v == null ? null : Number(v));
-    const sinceMs = since.getTime();
-    const all: (LedgerTrade & { _entryMs: number; _exitMs: number | null })[] = [];
-    for (const o of orders) {
-      if (!isLedgerEligible(o)) continue;
-      const mt = o.masterTrade;
-      if (!mt.signalStatus || mt.signalStatus === 'DELETED') continue;
-      const sub = subById.get(o.strategyFollowerId);
-      const qty = displayQty(sub, mt, o.quantity);
-      if (qty <= 0) continue;
-      const key = instrumentKey(mt.exchange, mt.symbol);
-      const ltpNow = this.prices.get(key);
-      const entry = N(mt.averagePrice) ?? N(mt.price) ?? N(o.averagePrice) ?? ltpNow ?? 0;
-      const masterQty = Math.max(1, mt.filledQuantity > 0 ? mt.filledQuantity : mt.quantity);
-      let closedQty = mt.signalStatus === 'CLOSED' ? qty : Math.min(qty, Math.round((qty * mt.closedQuantity) / masterQty));
-      let exitPx = closedQty ? N(mt.exitPrice) : null;
-      let exitMs: number | null = closedQty && mt.exitedAt ? mt.exitedAt.getTime() : null;
-      const entryMs = (mt.eventTimestamp ?? o.createdAt).getTime();
-      const execution = executionOf(o);
-      // A software exit of a position the client really held (paper or broker fill) closes the trade.
-      if (closedQty < qty && (execution === 'PAPER' || o.filledQuantity > 0)) {
-        const exitSide = mt.side === 'BUY' ? 'SELL' : 'BUY';
-        const e = manual.find(
-          (x) => x.accountId === o.brokerAccountId && x.m!.exchange === mt.exchange && x.m!.symbol === mt.symbol && x.m!.productType === mt.productType && x.m!.side === exitSide && x.at >= o.createdAt.getTime(),
-        );
-        if (e) {
-          const px = e.m!.price ?? ltpNow ?? entry;
-          const signalFirst = exitMs != null && exitMs <= e.at && exitPx != null;
-          const keep = signalFirst ? closedQty : 0;
-          const rest = qty - keep;
-          exitPx = keep ? (exitPx! * keep + px * rest) / qty : px;
-          closedQty = qty;
-          exitMs = e.at;
-        }
-      }
-      const openQty = qty - closedQty;
-      if (openQty) this.feed.ensure(mt.exchange as never, mt.symbol);
-      const ltp = openQty ? (ltpNow ?? entry) : null;
-      const dir = mt.side === 'BUY' ? 1 : -1;
-      const realized = exitPx != null && closedQty ? (exitPx - entry) * closedQty * dir : 0;
-      const unrealized = ltp != null ? (ltp - entry) * openQty * dir : 0;
-      const lot = Math.max(1, Number((mt.rawPayload as { lotSize?: number } | null)?.lotSize) || 1);
-      all.push({
-        tradeId: o.id,
-        tradeRef: tradeRef(o.id),
-        signalId: mt.id,
-        followerId: o.strategyFollowerId,
-        strategyName: sub?.strategy.name ?? '—',
-        mode: o.isPaper ? 'PAPER' : 'LIVE',
-        exchange: mt.exchange,
-        symbol: mt.symbol,
-        productType: mt.productType,
-        side: mt.side,
-        quantity: qty,
-        lots: lot > 1 ? +(qty / lot).toFixed(2) : null,
-        openQuantity: openQty,
-        entryPrice: r2(entry),
-        entryAt: new Date(entryMs).toISOString(),
-        carried: entryMs < sinceMs,
-        exitPrice: exitPx == null || !closedQty ? null : r2(exitPx),
-        exitAt: openQty || exitMs == null ? null : new Date(exitMs).toISOString(),
-        ltp,
-        status: openQty ? 'OPEN' : 'CLOSED',
-        realizedPnl: r2(realized),
-        unrealizedPnl: r2(unrealized),
-        pnl: r2(realized + unrealized),
-        execution,
-        _entryMs: entryMs,
-        _exitMs: exitMs,
-      });
-    }
-    // Exit orders → the strategy trade(s) they close (same client, contract, opposite side; FIFO).
-    const exitLinks = new Map<string, string>();
-    for (const o of orders) {
-      if (!o.isExit) continue;
-      const at = o.createdAt.getTime();
-      const cands = all.filter((t) => t.followerId === o.strategyFollowerId && t.exchange === o.exchange && t.symbol === o.symbol && t.productType === o.productType && t.side !== o.side && t._entryMs <= at);
-      const hit = cands.find((t) => t._exitMs == null || t._exitMs >= at - 60_000) ?? cands[cands.length - 1];
-      if (hit) exitLinks.set(o.id, hit.tradeId);
-    }
-    const trades = all
-      .filter((t) => t._entryMs >= sinceMs || t.openQuantity > 0 || (t._exitMs != null && t._exitMs >= sinceMs))
-      .map(({ _entryMs: _a, _exitMs: _b, ...t }) => t)
-      .sort((a, b) => (a.entryAt < b.entryAt ? 1 : a.entryAt > b.entryAt ? -1 : 0));
-    const realizedPnl = r2(trades.reduce((x, t) => x + t.realizedPnl, 0));
-    const unrealizedPnl = r2(trades.reduce((x, t) => x + t.unrealizedPnl, 0));
-    return {
-      trades,
-      summary: {
-        trades: trades.length,
-        open: trades.filter((t) => t.status === 'OPEN').length,
-        closed: trades.filter((t) => t.status === 'CLOSED').length,
-        realizedPnl,
-        unrealizedPnl,
-        totalPnl: r2(realizedPnl + unrealizedPnl),
-      },
-      exitLinks,
-    };
+    return { todayPnl: Math.round(strategies.reduce((a, x) => a + x.todayPnl, 0) * 100) / 100, strategies };
   }
 
   /**
@@ -316,27 +184,15 @@ export class ClientSummaryService {
    * (algo) name, script, side, entry / exit time and price, quantity, lots and P&L. Exits (master exit, TP/SL,
    * manual exit, square-off) are matched FIFO; lot-multiplier resizes add to / reduce the open row.
    */
-  async tradeBook(userId: string, opts: { brokerOnly?: boolean; masterUserId?: string } = {}) {
+  async tradeBook(userId: string) {
     const since = startOfTradingDayIST();
     // Disconnected / removed strategies and their trades are not shown to the client.
-    const subs = (
-      await this.prisma.strategyFollower.findMany({
-        where: { followerUserId: userId, ...(opts.masterUserId ? { strategy: { masterUserId: opts.masterUserId } } : {}) },
-        include: { strategy: { select: { name: true } } },
-      })
-    ).filter((x) => !isRemoved(x));
+    const subs = (await this.prisma.strategyFollower.findMany({ where: { followerUserId: userId }, include: { strategy: { select: { name: true } } } })).filter((x) => !isRemoved(x));
     const subName = new Map(subs.map((x) => [x.id, x.strategy.name]));
     const [orders, audits] = await Promise.all([
       this.prisma.copyOrder.findMany({
         // From 10 days back, so a position bought earlier (carry forward) and exited today is matched to its entry.
-        where: {
-          followerUserId: userId,
-          createdAt: { gte: new Date(since.getTime() - 10 * 86_400_000) },
-          filledQuantity: { gt: 0 },
-          strategyFollowerId: { in: subs.map((x) => x.id) },
-          // brokerOnly: actual Demat executions only (real broker fills), never paper.
-          ...(opts.brokerOnly ? { isPaper: false } : {}),
-        },
+        where: { followerUserId: userId, createdAt: { gte: new Date(since.getTime() - 10 * 86_400_000) }, filledQuantity: { gt: 0 }, strategyFollowerId: { in: subs.map((x) => x.id) } },
         include: { masterTrade: { select: { rawPayload: true, quantity: true, filledQuantity: true } } },
         orderBy: { createdAt: 'asc' },
       }),
@@ -379,8 +235,7 @@ export class ClientSummaryService {
         key: `${o.strategyFollowerId}|${o.exchange}:${o.symbol}|${o.productType}`,
         followerId: o.strategyFollowerId,
         side: o.side,
-        // Broker-executed P&L uses the ACTUAL filled quantity (never re-scaled for display).
-        qty: opts.brokerOnly ? o.filledQuantity : displayQty(subById2.get(o.strategyFollowerId), o.masterTrade, o.filledQuantity),
+        qty: displayQty(subById2.get(o.strategyFollowerId), o.masterTrade, o.filledQuantity),
         price: o.averagePrice == null ? 0 : Number(o.averagePrice),
         id: o.id,
         lot,
@@ -477,9 +332,7 @@ export class ClientSummaryService {
 
     // Trades the broker REJECTED (never reached the demat) are still tracked here at the strategy's prices,
     // so the client sees what the strategy did. They are tagged and kept out of the total P&L.
-    const rejectedOrders = opts.brokerOnly
-      ? []
-      : await this.prisma.copyOrder.findMany({
+    const rejectedOrders = await this.prisma.copyOrder.findMany({
       where: {
         followerUserId: userId,
         createdAt: { gte: since },

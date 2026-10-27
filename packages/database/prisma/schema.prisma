@@ -212,9 +212,6 @@ model User {
   licenceDays       Int?
   licenceAssignedAt DateTime?
   licenceExpiresAt  DateTime?
-  /// Software trading mode chosen on the dashboard: PAPER (simulated) or LIVE (route orders to the connected
-  /// broker). Independent of any broker connection — switching never connects / disconnects a broker.
-  tradingMode     String     @default("PAPER")
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 

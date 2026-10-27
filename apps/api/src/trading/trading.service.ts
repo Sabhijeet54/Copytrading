@@ -63,25 +63,6 @@ export class TradingService implements OnModuleInit {
     return this.config.PAPER_MODE;
   }
 
-  /**
-   * The user's internal "paper ledger" account (broker MOCK). It is NOT a broker connection: it only gives
-   * software-generated trades (paper fills, and live trades that could not be sent to a broker) an account to
-   * be recorded against, so a client can trade on paper — and see Live-mode trades — without connecting a broker.
-   */
-  async ensureLedgerAccount(userId: string): Promise<BrokerAccount> {
-    return this.prisma.brokerAccount.upsert({
-      where: { userId_broker: { userId, broker: 'MOCK' } },
-      create: { userId, broker: 'MOCK', status: 'CONNECTED', isPaper: true, mode: 'TRADING', lastConnectedAt: new Date() },
-      update: {},
-    });
-  }
-
-  /** Software trading mode of a user (dashboard switch). Demo licence is always PAPER. */
-  async tradingModeOf(userId: string): Promise<'PAPER' | 'LIVE'> {
-    const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { tradingMode: true, demo: true } });
-    return u && !u.demo && u.tradingMode === 'LIVE' ? 'LIVE' : 'PAPER';
-  }
-
   /** Hard guard used before every order: DATA_ONLY (master) accounts can never place orders. */
   assertOrderAllowed(account: Pick<BrokerAccount, 'mode' | 'id'>): void {
     if (account.mode === 'DATA_ONLY') throw new OrderBlockedError();

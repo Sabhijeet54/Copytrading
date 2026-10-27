@@ -41,7 +41,7 @@ function Donut({ rows }: { rows: Data['strategies'] }) {
   const [hover, setHover] = useState<number | null>(null);
   const data = rows.map((r, i) => ({ ...r, color: COLORS[i % COLORS.length]!, abs: Math.abs(r.todayPnl) })).filter((r) => r.abs > 0);
   const total = data.reduce((s, r) => s + r.abs, 0);
-  if (!total) return <p className="py-16 text-center text-sm text-muted-foreground">No strategy trades today yet.</p>;
+  if (!total) return <p className="py-16 text-center text-sm text-muted-foreground">No executed trades today yet.</p>;
   const R = 70;
   const C = 2 * Math.PI * R;
   let acc = 0;
@@ -100,22 +100,19 @@ function Donut({ rows }: { rows: Data['strategies'] }) {
 
 const fmtDay = (iso: string) => new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }).format(new Date(iso));
 
-/**
- * Paper ⇄ Live switch of the SOFTWARE trading mode (asks before going live). It never connects, disconnects or
- * authenticates a broker and works without one — broker connections are managed only in Broker connection.
- */
-function TradingModeSwitch({ mode, brokerReady, locked = false }: { mode: 'PAPER' | 'LIVE'; brokerReady: boolean; locked?: boolean }) {
+/** Paper ⇄ Live switch for the client's trading account (asks before going live). */
+function TradingModeSwitch({ b, locked = false }: { b: NonNullable<Data['broker']>; locked?: boolean }) {
   const setMode = useSetTradingMode();
   const [confirmLive, setConfirmLive] = useState(false);
-  const live = mode === 'LIVE';
+  const live = b.tradingMode === 'LIVE';
   const flip = () => {
     if (live) setMode.mutate('PAPER', { onSuccess: () => toast.success('Switched to PAPER — strategy trades are now simulated'), onError: (e) => toast.error(e.message) });
     else setConfirmLive(true);
   };
   return (
-    <div className="grid gap-2">
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-muted-foreground">Trading mode</span>
+    <div className="grid gap-1">
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span>Trading mode</span>
         <button
           type="button"
           role="switch"
@@ -124,32 +121,23 @@ function TradingModeSwitch({ mode, brokerReady, locked = false }: { mode: 'PAPER
           onClick={flip}
           disabled={setMode.isPending || locked}
           title={live ? 'Switch to paper trading' : 'Switch to live trading'}
-          className="flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-muted disabled:opacity-60"
+          className="flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-muted"
         >
           <span className={cn(!live && 'font-semibold text-foreground')}>Paper</span>
-          <span className={cn('relative inline-block h-5 w-9 rounded-full transition-colors', live ? 'bg-emerald-600' : 'bg-muted-foreground/40')}>
-            <span className={cn('absolute top-0.5 size-4 rounded-full bg-white transition-all', live ? 'left-[18px]' : 'left-0.5')} />
+          <span className={cn('relative inline-block h-4 w-7 rounded-full transition-colors', live ? 'bg-emerald-600' : 'bg-muted-foreground/40')}>
+            <span className={cn('absolute top-0.5 size-3 rounded-full bg-white transition-all', live ? 'left-3.5' : 'left-0.5')} />
           </span>
           <span className={cn(live && 'font-semibold text-success')}>Live</span>
         </button>
       </div>
-      <p className="text-xs text-muted-foreground">
-        {live
-          ? brokerReady
-            ? 'Strategy trades are recorded in the software and sent to your connected broker as real orders.'
-            : 'Strategy trades are recorded in the software, but NOT sent to a broker until a valid broker connection exists.'
-          : 'Strategy trades are simulated in the software — no broker needed, no real orders.'}
+      <p className="text-[11px] text-muted-foreground">
+        {live ? 'Strategy trades go to your broker as real orders.' : 'Strategy trades are simulated — no real orders.'}
       </p>
-      <p className="text-[11px] text-muted-foreground">Switching mode never connects or disconnects your broker.</p>
       <Dialog open={confirmLive} onOpenChange={setConfirmLive}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Switch to LIVE trading?</DialogTitle>
-            <DialogDescription>
-              From the next strategy trade, trades are recorded as Live trades
-              {brokerReady ? ' and placed as REAL orders in your connected broker account with real money.' : '. No broker is connected right now, so no order will be sent until you connect one in Broker connection.'}{' '}
-              Any open paper trades are closed now in the software at the current price (no broker order).
-            </DialogDescription>
+            <DialogDescription>From the next strategy trade, orders are placed as REAL orders in your broker account with real money. Any open paper trades are closed now at the current price.</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setConfirmLive(false)}>
@@ -159,7 +147,7 @@ function TradingModeSwitch({ mode, brokerReady, locked = false }: { mode: 'PAPER
               disabled={setMode.isPending}
               onClick={() =>
                 setMode.mutate('LIVE', {
-                  onSuccess: (r) => (toast.success(r.paperClosed ? `LIVE mode is ON — ${r.paperClosed} open paper trade(s) closed` : 'LIVE mode is ON'), setConfirmLive(false)),
+                  onSuccess: (r) => (toast.success(r.paperClosed ? `LIVE trading is ON — ${r.paperClosed} open paper trade(s) closed` : 'LIVE trading is ON'), setConfirmLive(false)),
                   onError: (e) => toast.error(e.message),
                 })
               }
@@ -194,27 +182,13 @@ export function ClientDashboard() {
     <div className="mb-6 grid gap-4">
       {d.licence.active === false ? (
         <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          <strong>Your licence has expired.</strong> Auto trading (paper and live) and strategy connect are blocked. Contact your master to renew.
+          <strong>Your licence has expired.</strong> Auto trading (paper and live), strategy connect and broker connect are blocked. Contact your master to renew.
         </div>
       ) : null}
-      <div className={cn("fox-tiles grid gap-4 sm:grid-cols-2", "xl:grid-cols-3")}>
+      <div className={cn("fox-tiles grid gap-4 sm:grid-cols-2", SHOW_CLIENT_LICENCE ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">Trading mode</CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-2 text-sm">
-            <div className="flex items-center gap-2">
-              {d.tradingMode === 'LIVE' ? <Badge tone="ok">LIVE</Badge> : <Badge tone="warn">PAPER</Badge>}
-              <span className="text-xs text-muted-foreground">software mode</span>
-            </div>
-            <TradingModeSwitch mode={d.tradingMode} brokerReady={!!d.broker?.connected} locked={d.licence.active === false || (!!d.licence.demo && d.tradingMode !== 'LIVE')} />
-            {d.licence.demo ? <p className="text-xs text-amber-700">Demo licence — paper trading only.</p> : null}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Strategy P&amp;L today</CardTitle>
+            <CardTitle className="text-base">Today&apos;s P&amp;L</CardTitle>
           </CardHeader>
           <CardContent className="flex items-end justify-between">
             <div>
@@ -223,10 +197,7 @@ export function ClientDashboard() {
                 {formatINR(d.todayPnl)}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Software-level ({d.tradingMode === 'LIVE' ? 'Live' : 'Paper'} mode) · realized <Pnl value={d.software.realizedPnl} /> · unrealized <Pnl value={d.software.unrealizedPnl} />
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {d.software.trades} trade{d.software.trades === 1 ? '' : 's'} · {d.software.open} open · {d.software.closed} closed ·{' '}
+                Today&apos;s profit / loss ·{' '}
                 <Link href="/portfolio/positions" className="font-medium text-primary hover:underline">
                   positions
                 </Link>
@@ -238,54 +209,33 @@ export function ClientDashboard() {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">Broker-executed P&amp;L</CardTitle>
+            <CardTitle className="text-base">Connected broker</CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-1 text-sm">
-            <p className="text-2xl font-semibold tabular-nums">
-              <Pnl value={d.brokerPnl} />
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Actual Demat executions only (filled broker orders). Paper and not-executed trades are never included.{' '}
-              <Link href="/portfolio/positions?tab=orders" className="font-medium text-primary hover:underline">
-                Orders
-              </Link>
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Broker status</CardTitle>
-          </CardHeader>
-          {/* Display only — broker login / token generation happens in Broker connection, never here. */}
           <CardContent className="grid gap-3 text-sm">
             {d.broker ? (
-              <div className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-2 font-medium">
-                  <Building2 className="size-5 text-primary" /> {brokerLabel(d.broker.broker)}
-                </span>
-                {d.broker.connected ? <Badge tone="ok">Connected</Badge> : <Badge tone="warn">{d.broker.status === 'EXPIRED' ? 'Expired' : 'Not connected'}</Badge>}
-              </div>
+              <>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2 font-medium">
+                    <Building2 className="size-5 text-primary" /> {brokerLabel(d.broker.broker)}
+                  </span>
+                  {d.broker.connected ? <Badge tone="ok">Connected</Badge> : <Badge tone="warn">{d.broker.status === 'EXPIRED' ? 'Expired' : 'Not connected'}</Badge>}
+                </div>
+                <TradingModeSwitch b={d.broker} locked={d.licence.active === false || (!!d.licence.demo && d.broker.tradingMode !== 'LIVE')} />
+                {d.licence.demo ? <p className="text-xs text-amber-700">Demo licence — paper trading only.</p> : null}
+                {!d.broker.connected ? (
+                  <Button asChild size="sm" variant="outline">
+                    <Link href="/broker">Connect broker</Link>
+                  </Button>
+                ) : null}
+              </>
             ) : (
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-muted-foreground">No broker connected</span>
-                <Badge tone="off">None</Badge>
-              </div>
+              <>
+                <p className="text-muted-foreground">No broker connected yet.</p>
+                <Button asChild size="sm">
+                  <Link href="/broker-api">Set up Broker API</Link>
+                </Button>
+              </>
             )}
-            <p className="text-xs text-muted-foreground">
-              {d.broker?.connected
-                ? d.tradingMode === 'LIVE'
-                  ? 'Live strategy trades are sent to this broker.'
-                  : 'Not used in Paper mode.'
-                : d.tradingMode === 'LIVE'
-                  ? 'Live strategy trades are recorded but not sent to any broker.'
-                  : 'Not needed for paper trading.'}{' '}
-              Manage it in{' '}
-              <Link href="/broker" className="font-medium text-primary hover:underline">
-                Broker connection
-              </Link>
-              .
-            </p>
           </CardContent>
         </Card>
 
@@ -361,9 +311,9 @@ export function ClientDashboard() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Today&apos;s strategy performance</CardTitle>
+            <CardTitle className="text-base">Today overall P&amp;L</CardTitle>
             <p className="text-sm text-muted-foreground">
-              Software P&amp;L: <span className="font-semibold"><Pnl value={d.todayPnl} /></span> · Broker-executed: <span className="font-semibold"><Pnl value={d.brokerPnl} /></span>
+              Total P&amp;L: <span className="font-semibold"><Pnl value={d.todayPnl} /></span>
             </p>
           </CardHeader>
           <CardContent className="overflow-x-auto p-0">
@@ -372,16 +322,14 @@ export function ClientDashboard() {
                 <TableRow>
                   <TableHead className="pl-6">Algo name</TableHead>
                   <TableHead>Allocation</TableHead>
-                  <TableHead className="text-right">Trades</TableHead>
-                  <TableHead className="text-right">Software P&amp;L</TableHead>
-                  <TableHead className="text-right">Broker-executed</TableHead>
+                  <TableHead className="text-right">Today P&amp;L</TableHead>
                   <TableHead className="pr-6">Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {sorted.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
                       No strategy assigned to you yet — contact your admin.
                     </TableCell>
                   </TableRow>
@@ -390,12 +338,8 @@ export function ClientDashboard() {
                     <TableRow key={s.followerId}>
                       <TableCell className="pl-6 font-medium">{s.name}</TableCell>
                       <TableCell className="text-muted-foreground">{s.allocation}</TableCell>
-                      <TableCell className="text-right tabular-nums">{s.todayTrades}</TableCell>
                       <TableCell className="text-right font-medium">
                         <Pnl value={s.todayPnl} />
-                      </TableCell>
-                      <TableCell className="text-right text-muted-foreground">
-                        <Pnl value={s.brokerPnl} />
                       </TableCell>
                       <TableCell className="pr-6">
                         {s.copyStatus === 'ON' ? (

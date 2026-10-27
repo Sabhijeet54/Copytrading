@@ -88,8 +88,7 @@ export interface MasterOrderInput {
   stopLossPrice?: number;
 }
 export interface FollowInput {
-  /** Optional — without it the server uses the client's broker account or the internal paper ledger. */
-  brokerAccountId?: string;
+  brokerAccountId: string;
   /** Resize trades already booked (still open) to the new lot multiplier (default true). */
   applyToOpenTrades?: boolean;
   allocationMode: 'FIXED_QUANTITY' | 'CAPITAL_PERCENTAGE' | 'PROPORTIONAL';
@@ -242,58 +241,18 @@ export function usePlaceMasterOrder() {
 
 // -------------------------------------------------------------- follower
 export const useFollowStrategies = () => useQuery({ queryKey: ['follow', 'strategies'], queryFn: () => api<StrategyWithSub[]>('/follow/strategies') });
-/** Broker-execution status shown in the Orders section (never "executed" without a broker fill). */
-export type BrokerStatus =
-  | 'PAPER'
-  | 'NOT_SENT'
-  | 'SKIPPED'
-  | 'EXECUTED'
-  | 'PARTIALLY_FILLED'
-  | 'PENDING'
-  | 'SUBMITTED'
-  | 'OPEN'
-  | 'REJECTED'
-  | 'CANCELLED'
-  | 'FAILED'
-  | 'UNKNOWN'
-  | 'FILLED';
-export type CopyOrderRow = CopyOrderView & {
-  strategyName?: string;
-  /** Strategy Trade ID this order belongs to (links the software trade with the broker order). */
-  strategyTradeId?: string | null;
-  strategyTradeRef?: string | null;
-  mode?: 'PAPER' | 'LIVE';
-  isExit?: boolean;
-  price?: string | null;
-  triggerPrice?: string | null;
-  brokerStatus?: BrokerStatus;
-  brokerName?: string;
-  submittedAt?: string | null;
-  filledAt?: string | null;
-};
+export type CopyOrderRow = CopyOrderView & { strategyName?: string };
 export const usePortfolio = () =>
   useQuery({
     queryKey: ['follow', 'portfolio'],
     queryFn: () =>
-      api<{
-        paperMode: boolean;
-        tradingMode?: 'PAPER' | 'LIVE';
-        /** Software-level P&L (internal trade ledger). */
-        todayPnl: number;
-        /** Actual broker-executed (Demat) P&L. */
-        brokerPnl?: number;
-        live: LiveAccount[];
-        paperPositions: PaperPosition[];
-        copyOrders: CopyOrderRow[];
-      }>('/follow/portfolio'),
+      api<{ paperMode: boolean; todayPnl: number; live: LiveAccount[]; paperPositions: PaperPosition[]; copyOrders: CopyOrderRow[] }>('/follow/portfolio'),
     refetchInterval: LIVE_MS,
   });
-export const useMyOrders = () => useQuery({ queryKey: ['follow', 'orders'], queryFn: () => api<CopyOrderRow[]>('/follow/orders'), refetchInterval: LIVE_MS });
 export function useSetTradingMode() {
   const qc = useQueryClient();
   return useMutation({
-    // Changes the SOFTWARE trading mode only — never connects / disconnects / authenticates a broker.
-    mutationFn: (mode: 'PAPER' | 'LIVE') => api<{ mode: 'PAPER' | 'LIVE'; paperClosed?: number; unchanged?: boolean }>('/follow/trading-mode', { method: 'POST', body: { mode } }),
+    mutationFn: (mode: 'PAPER' | 'LIVE') => api<{ mode: 'PAPER' | 'LIVE'; paperClosed?: number }>('/follow/trading-mode', { method: 'POST', body: { mode } }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['client-dashboard'] });
       void qc.invalidateQueries({ queryKey: ['follow'] });
@@ -444,9 +403,7 @@ export interface MasterClientRow {
   demo?: boolean;
   licenceStatus: LicenceState;
   broker: (BrokerAccountView & { simulated: boolean }) | null;
-  tradingMode?: 'PAPER' | 'LIVE';
   todayPnl: number;
-  brokerPnl?: number;
   todayTrades: number;
   subscriptions: { followerId: string; strategyId: string; strategyName: string; copyStatus: 'ON' | 'OFF' | 'PAUSED'; allocation: string }[];
 }
@@ -458,7 +415,6 @@ export interface StrategyDay {
   allocation: string;
   todayPnl: number;
   todayTrades: number;
-  brokerPnl?: number;
 }
 export type HistoryRange = 'today' | '7d' | '30d' | 'all';
 export interface MasterClientDetail {
@@ -476,9 +432,7 @@ export interface MasterClientDetail {
     licenceStatus: LicenceState;
   };
   brokerAccounts: (BrokerAccountView & { simulated: boolean })[];
-  tradingMode?: 'PAPER' | 'LIVE';
   todayPnl: number;
-  brokerPnl?: number;
   strategies: (StrategyFollowerView & { allocation: string; today: StrategyDay | null })[];
   range: HistoryRange;
   orders: CopyOrderRow[];
@@ -587,15 +541,9 @@ export const useFnoChain = (exchange: FnoExchange | null, name: string, kind: 'O
 
 // ------------------------------------------------------------ client trade book
 
-/** One software-generated strategy trade (internal trade ledger). */
 export interface TradeBookRow {
-  /** Strategy Trade ID (links to the broker order in the Orders section). */
-  tradeId: string;
-  tradeRef: string;
-  signalId: string;
-  followerId: string;
+  id: string;
   strategyName: string;
-  mode: 'PAPER' | 'LIVE';
   exchange: string;
   symbol: string;
   productType: string;
@@ -610,26 +558,16 @@ export interface TradeBookRow {
   exitPrice: number | null;
   exitAt: string | null;
   ltp: number | null;
-  /** Software status (strategy) — never the broker's status. */
   status: 'OPEN' | 'CLOSED';
-  realizedPnl: number;
-  unrealizedPnl: number;
   pnl: number;
-  /** Broker side of the entry order; details (incl. rejections) are in the Orders section. */
-  execution: 'PAPER' | 'EXECUTED' | 'PARTIAL' | 'PENDING' | 'NOT_EXECUTED';
-}
-export interface LedgerSummary {
-  trades: number;
-  open: number;
-  closed: number;
-  realizedPnl: number;
-  unrealizedPnl: number;
-  totalPnl: number;
+  /** Broker rejected the order — tracked at the strategy's prices, not in the demat, not in the total. */
+  rejected?: boolean;
+  rejectReason?: string | null;
 }
 export const useTradeBook = () =>
   useQuery({
     queryKey: ['follow', 'trades'],
-    queryFn: () => api<{ software: LedgerSummary; totalPnl: number; brokerExecuted: { totalPnl: number; trades: number }; rows: TradeBookRow[] }>('/follow/trades'),
+    queryFn: () => api<{ totalPnl: number; rejectedPnl?: number; rows: TradeBookRow[] }>('/follow/trades'),
     refetchInterval: 5_000,
   });
 
