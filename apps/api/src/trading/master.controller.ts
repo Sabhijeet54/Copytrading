@@ -245,7 +245,7 @@ export class MasterController {
     const running = u.licenceExpiresAt && u.licenceExpiresAt > now;
     const extend = dto.extend !== false && running;
     const expires = new Date((extend ? u.licenceExpiresAt!.getTime() : now.getTime()) + dto.days * 86_400_000);
-    await this.prisma.user.update({ where: { id: userId }, data: { licenceDays: (extend ? (u.licenceDays ?? 0) : 0) + dto.days, licenceAssignedAt: now, licenceExpiresAt: expires, demo: !!dto.demo } });
+    await this.prisma.user.update({ where: { id: userId }, data: { licenceDays: (extend ? (u.licenceDays ?? 0) : 0) + dto.days, licenceAssignedAt: now, licenceExpiresAt: expires, demo: !!dto.demo, ...(dto.demo ? { tradingMode: 'PAPER' } : {}) } });
     if (dto.demo) await this.prisma.brokerAccount.updateMany({ where: { userId, mode: 'TRADING' }, data: { isPaper: true } });
     await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: user.actorId ?? user.id, targetType: 'User', targetId: userId, metadata: { licenceDays: dto.days, demo: !!dto.demo, extend: !!extend, expiresAt: expires.toISOString(), byMaster: true }, client: clientInfo(req) });
     this.accountEvents.emit({ type: 'settings', brokerAccountId: '', userId });
@@ -399,14 +399,16 @@ export class MasterController {
     for (const o of own) if (!byUser.has(o.id)) byUser.set(o.id, []);
     const ids = [...byUser.keys()];
     const [users, accounts] = await Promise.all([
-      this.prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true, mobile: true, status: true, licenceExpiresAt: true, licenceDays: true, demo: true } }),
+      this.prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true, mobile: true, status: true, licenceExpiresAt: true, licenceDays: true, demo: true, tradingMode: true } }),
       this.prisma.brokerAccount.findMany({ where: { userId: { in: ids }, broker: { not: 'MOCK' }, mode: 'TRADING' }, orderBy: { createdAt: 'asc' } }),
     ]);
     const userById = new Map(users.map((u) => [u.id, u]));
     const out = await Promise.all(
       [...byUser.entries()].map(async ([userId, list]) => {
         const f = userById.get(userId)!;
-        const account = list.find((x) => x.brokerAccount)?.brokerAccount ?? accounts.find((a) => a.userId === userId) ?? null;
+        // Real broker only (the internal paper ledger account is not a broker connection).
+        const account = list.find((x) => x.brokerAccount && x.brokerAccount.broker !== 'MOCK')?.brokerAccount ?? accounts.find((a) => a.userId === userId) ?? null;
+        const softwarePaper = f.demo || f.tradingMode !== 'LIVE';
         const day = await this.summary.today(userId, user.id);
         return {
           userId,
@@ -418,8 +420,11 @@ export class MasterController {
           licenceDays: f.licenceDays,
           demo: f.demo,
           licenceStatus: licenceStatus(f.licenceExpiresAt),
-          broker: account ? { ...toBrokerAccountView(account), simulated: this.trading.isSimulated(account) } : null,
+          tradingMode: softwarePaper ? 'PAPER' : 'LIVE',
+          broker: account ? { ...toBrokerAccountView(account), simulated: softwarePaper } : null,
+          /** Software-level P&L (internal ledger); brokerPnl = actual broker-executed P&L. */
           todayPnl: day.todayPnl,
+          brokerPnl: day.brokerPnl,
           todayTrades: day.strategies.reduce((a, x) => a + x.todayTrades, 0),
           subscriptions: list.filter((x) => !isRemoved(x)).map((x) => ({ followerId: x.id, strategyId: x.strategyId, strategyName: x.strategy.name, copyStatus: x.copyStatus, allocation: allocationLabel(x) })),
         };
@@ -448,7 +453,7 @@ export class MasterController {
     const [u, accounts, day, orders] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
-        select: { id: true, name: true, email: true, mobile: true, status: true, createdAt: true, lastLoginAt: true, licenceDays: true, licenceAssignedAt: true, licenceExpiresAt: true },
+        select: { id: true, name: true, email: true, mobile: true, status: true, createdAt: true, lastLoginAt: true, licenceDays: true, licenceAssignedAt: true, licenceExpiresAt: true, demo: true, tradingMode: true },
       }),
       this.prisma.brokerAccount.findMany({ where: { userId, broker: { not: 'MOCK' } }, orderBy: { createdAt: 'asc' } }),
       this.summary.today(userId, user.id),
@@ -469,8 +474,10 @@ export class MasterController {
         licenceExpiresAt: u.licenceExpiresAt?.toISOString() ?? null,
         licenceStatus: licenceStatus(u.licenceExpiresAt),
       },
-      brokerAccounts: accounts.map((a) => ({ ...toBrokerAccountView(a), simulated: this.trading.isSimulated(a) })),
+      tradingMode: u.demo || u.tradingMode !== 'LIVE' ? 'PAPER' : 'LIVE',
+      brokerAccounts: accounts.map((a) => ({ ...toBrokerAccountView(a), simulated: u.demo || u.tradingMode !== 'LIVE' })),
       todayPnl: day.todayPnl,
+      brokerPnl: day.brokerPnl,
       strategies: subsAll
         .filter((s) => !isRemoved(s))
         .map((s) => ({ ...toStrategyFollowerView(s), allocation: allocationLabel(s), today: day.strategies.find((d) => d.followerId === s.id) ?? null })),

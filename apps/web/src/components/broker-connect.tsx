@@ -19,11 +19,13 @@ export function BrokerCallbackNotice() {
     const result = params.get('result');
     const broker = params.get('broker');
     if (!result || !broker) return;
-    const name = broker === 'zerodha' ? 'Zerodha' : 'Angel One';
+    const name = ({ zerodha: 'Zerodha', 'angel-one': 'Angel One', upstox: 'Upstox', fyers: 'Fyers', dhan: 'Dhan', 'kotak-neo': 'Kotak Neo', '5paisa': '5paisa', 'alice-blue': 'Alice Blue' } as Record<string, string>)[broker] ?? broker;
     if (result === 'connected') toast.success(`${name} connected`);
     else toast.error(`${name} login failed: ${params.get('message') ?? 'unknown error'}`);
     void qc.invalidateQueries({ queryKey: qk.myBrokerAccounts });
-    router.replace('/dashboard');
+    void qc.invalidateQueries({ queryKey: ['client-dashboard'] });
+    // Display only: the connection itself already happened in the broker callback (Broker connection section).
+    router.replace(window.location.pathname);
   }, [params, router, qc]);
   return null;
 }

@@ -51,7 +51,7 @@ export function brokerLabel(broker: string): string {
     case 'ALICE_BLUE':
       return 'Alice Blue';
     case 'MOCK':
-      return 'Paper (Mock)';
+      return 'Paper ledger (no broker)';
     default:
       return broker;
   }

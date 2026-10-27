@@ -2,8 +2,6 @@
 
 import { ArrowRight } from 'lucide-react';
 import Link from 'next/link';
-import { Suspense } from 'react';
-import { BrokerCallbackNotice } from '@/components/broker-connect';
 import { ClientDashboard } from '@/components/client-dashboard';
 import { MasterDashboard } from '@/components/master-dashboard';
 import { PageHeader } from '@/components/page-header';
@@ -16,9 +14,6 @@ export default function DashboardPage() {
 
   return (
     <>
-      <Suspense fallback={null}>
-        <BrokerCallbackNotice />
-      </Suspense>
       <PageHeader
         title={`Welcome, ${user.name.split(' ')[0]}`}
         description={user.role === 'MASTER' ? 'Master trader account' : user.role === 'FOLLOWER' ? 'Client account' : 'Administrator account'}

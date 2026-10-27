@@ -182,15 +182,20 @@ export class RiskService implements OnApplicationBootstrap, OnModuleDestroy {
           positions.map(async (p) => {
             const side = p.qty > 0 ? 'SELL' : 'BUY';
             const qty = Math.abs(p.qty);
+            let logAccount: Pick<BrokerAccount, 'id'> = s.brokerAccount!;
             try {
               if (sim) {
-                await this.engine.applyPaperFill(s.followerUserId, s.brokerAccountId!, { ...p, side }, qty, this.prices.get(instrumentKey(p.exchange, p.symbol)) ?? 0);
+                // Book the paper exit where the paper position is actually held (paper ledger or broker account).
+                const held = await this.engine.paperAccountFor(s.followerUserId, { ...p, side }, s.brokerAccountId);
+                if (!held) return;
+                logAccount = { id: held };
+                await this.engine.applyPaperFill(s.followerUserId, held, { ...p, side }, qty, this.prices.get(instrumentKey(p.exchange, p.symbol)) ?? 0);
               } else if (adapter) {
                 this.trading.assertOrderAllowed(s.brokerAccount!);
                 await adapter.placeOrder({ exchange: p.exchange, symbol: p.symbol, side, quantity: qty, orderType: 'MARKET', productType: p.productType, tag: 'ctpexit' });
               } else return;
               this.registry.applyClientFill(s.id, p.exchange, p.symbol, p.productType, -p.qty);
-              await this.logManualExit(s.brokerAccount!, p, side, qty, this.prices.get(instrumentKey(p.exchange, p.symbol)) ?? null, null);
+              await this.logManualExit(logAccount, p, side, qty, this.prices.get(instrumentKey(p.exchange, p.symbol)) ?? null, null);
               res.orders++;
             } catch (e) {
               res.failed++;

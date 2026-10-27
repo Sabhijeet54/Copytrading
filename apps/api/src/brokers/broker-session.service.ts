@@ -169,7 +169,7 @@ export class BrokerSessionService {
   }
 
   private async saveSessionOnce(userId: string, broker: BrokerName, s: SessionMaterial, client?: ClientInfo): Promise<BrokerAccount> {
-    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true, licenceExpiresAt: true, demo: true } });
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true, licenceExpiresAt: true, demo: true, tradingMode: true } });
     if (!user) throw new NotFoundException('User not found');
     if (user.role === 'FOLLOWER' && user.licenceExpiresAt && user.licenceExpiresAt.getTime() <= Date.now()) {
       throw new ForbiddenException('Your licence has expired — contact your master to renew it before connecting a broker.');
@@ -206,8 +206,9 @@ export class BrokerSessionService {
       // 2) Upsert this user's row for the broker.
       const existing = await tx.brokerAccount.upsert({
         where: { userId_broker: { userId, broker } },
-        // A new client account starts in PAPER when the platform default is paper (PAPER_MODE=true); the client switches to LIVE.
-        create: { userId, broker, brokerClientId: s.brokerClientId, status: 'PENDING', mode, isPaper: mode === 'TRADING' && (this.config.PAPER_MODE || user.demo) },
+        // A new client account follows the client's software trading mode (dashboard Paper / Live switch).
+        // Connecting a broker never changes that mode.
+        create: { userId, broker, brokerClientId: s.brokerClientId, status: 'PENDING', mode, isPaper: mode === 'TRADING' && (user.demo || user.tradingMode !== 'LIVE') },
         update: {},
       });
       if (existing.status === 'CONNECTED' && existing.brokerClientId && existing.brokerClientId !== s.brokerClientId) {
@@ -244,6 +245,14 @@ export class BrokerSessionService {
           disconnectedAt: null,
         },
       });
+      // Subscriptions that had no broker yet (or only the internal paper ledger) now route to this account.
+      // Copy status is NOT changed — connecting a broker never starts or stops trading by itself.
+      if (mode === 'TRADING') {
+        await tx.strategyFollower.updateMany({
+          where: { followerUserId: userId, OR: [{ brokerAccountId: null }, { brokerAccount: { broker: 'MOCK' } }] },
+          data: { brokerAccountId: existing.id },
+        });
+      }
       await this.audit.logTx(tx, {
         action: 'BROKER_CONNECTED',
         actorUserId: userId,

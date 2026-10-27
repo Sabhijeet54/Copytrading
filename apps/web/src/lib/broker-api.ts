@@ -61,7 +61,13 @@ export function useBrokerApiMutations(b: BrokerSlug) {
 }
 
 export interface ClientDashboard {
+  /** Software trading mode (dashboard switch) — independent of the broker connection. */
+  tradingMode: 'PAPER' | 'LIVE';
+  /** Software-level P&L (internal trade ledger). */
   todayPnl: number;
+  software: { trades: number; open: number; closed: number; realizedPnl: number; unrealizedPnl: number; totalPnl: number };
+  /** Actual broker-executed (Demat) P&L. */
+  brokerPnl: number;
   broker: {
     accountId: string;
     broker: string;
@@ -83,6 +89,7 @@ export interface ClientDashboard {
     allocation: string;
     todayPnl: number;
     todayTrades: number;
+    brokerPnl: number;
   }[];
 }
 

@@ -19,7 +19,7 @@ import { instrumentKey, PriceCacheService } from '../market-data/price-cache.ser
 import { NotifyService } from '../realtime/notify.service';
 import { RealtimeService } from '../realtime/realtime.gateway';
 import { OrderBlockedError, segmentOf, type BrokerOrder, type PlaceOrderInput } from './broker-adapter';
-import { ClientRegistryService, type ClientEntry } from './client-registry.service';
+import { ClientRegistryService, type ClientEntry, type SkippedClient } from './client-registry.service';
 import { computeCopyQuantity } from './copy-quantity';
 import { TradingService } from './trading.service';
 
@@ -59,6 +59,9 @@ export interface CopyResult {
   /** Signal not executed because the follower's broker was not connected (history only). */
   missed?: boolean;
 }
+
+/** errorCode of a LIVE-mode strategy trade that was recorded in the software ledger but never sent to a broker. */
+export const NOT_SENT = 'NOT_SENT';
 
 export interface FanOutSummary {
   tradeId: string;
@@ -194,26 +197,12 @@ export class CopyEngineService {
       results = await Promise.all(registry.forStrategy(strategy.id).map((c) => this.copyOne(c, ctx)));
     }
     const totalMs = Math.round(performance.now() - t0);
-    // Followers with copy ON whose demat is not connected (disconnected / expired / no account): record the
-    // signal in their history as a MISSED paper-style entry (would-be qty @ master price), and tell them.
+    // Followers with copy ON that could not be copied before any order: LIVE mode without a usable broker
+    // connection → the strategy trade is still recorded (software ledger) as NOT SENT to the broker; licence /
+    // disabled-account skips are recorded as SKIPPED (not a trade for this client).
     for (const s of registry.skipped(strategy.id)) {
       this.logger.warn(`Skipped follower ${s.followerId}: ${s.reason}`);
-      const strat = registry.strategy(strategy.id) ?? { masterCapital: 0, maxOrderValue: null, maxQuantityPerOrder: null };
-      const wouldBe = s.settings ? computeCopyQuantity(strat, s.settings, masterQty, price, lotSize).qty : 0;
-      results.push({
-        followerId: s.followerId,
-        userId: s.userId,
-        accountId: s.accountId,
-        broker: s.broker,
-        simulated: false,
-        qty: wouldBe,
-        fillPrice: price ?? undefined,
-        status: 'REJECTED',
-        errorCode: 'MISSED',
-        errorMessage: `Signal aaya tha, par aapka demat connect nahi tha (${s.reason}).`,
-        attempts: 0,
-        missed: true,
-      });
+      results.push(this.notSentResult(s, { strategyId: strategy.id, t, closing, masterQty, price, lotSize, halted }));
     }
     const sent = results.filter((r) => r.attempts > 0).length;
     if (sent) this.logger.log(`Master ${t.side} ${masterQty} ${key} → ${sent} follower order(s) in ${totalMs} ms`);
@@ -222,6 +211,33 @@ export class CopyEngineService {
       this.logger.error(`Persist of trade ${tradeId} failed: ${(err as Error).message}`),
     );
     return { tradeId, results, totalMs };
+  }
+
+  /**
+   * A follower that is in the registry's skipped list. LIVE-mode followers without a usable broker connection
+   * get a NOT_SENT row (would-be quantity at the strategy price) so the strategy trade stays in the software
+   * ledger; nothing is ever sent to a broker for them.
+   */
+  private notSentResult(
+    s: SkippedClient,
+    x: { strategyId: string; t: MasterTradeInput; closing: boolean; masterQty: number; price: number | null; lotSize: number; halted: boolean },
+  ): CopyResult {
+    const base = { followerId: s.followerId, userId: s.userId, accountId: s.accountId, broker: s.broker, simulated: false, attempts: 0, fillPrice: x.price ?? undefined };
+    if (!s.notSent || x.halted) return { ...base, qty: 0, status: 'REJECTED', errorCode: 'SKIPPED', errorMessage: x.halted ? 'Copying halted (kill switch)' : s.reason };
+    const strat = this.registry!.strategy(x.strategyId) ?? { masterCapital: 0, maxOrderValue: null, maxQuantityPerOrder: null };
+    if (!x.closing && s.settings?.allowedSegments.length && !s.settings.allowedSegments.includes(segmentOf(x.t.exchange))) {
+      return { ...base, qty: 0, status: 'REJECTED', errorCode: 'SKIPPED', errorMessage: `Segment ${segmentOf(x.t.exchange)} not allowed` };
+    }
+    const qty = s.settings ? computeCopyQuantity(strat, x.closing ? { ...s.settings, maxLots: null, maxQuantity: null, maxTradeValue: null } : s.settings, x.masterQty, x.price, x.lotSize).qty : 0;
+    if (qty <= 0) return { ...base, qty: 0, status: 'REJECTED', errorCode: 'SKIPPED', errorMessage: 'Quantity 0' };
+    return {
+      ...base,
+      qty,
+      status: 'FAILED',
+      errorCode: NOT_SENT,
+      errorMessage: `Not sent to broker — ${s.reason}. Connect your broker in Broker connection to place real orders.`,
+      missed: true,
+    };
   }
 
   /**
@@ -272,17 +288,36 @@ export class CopyEngineService {
         .catch(() => null);
       if (pp && Math.sign(pp.quantity) !== Math.sign(x.signed)) (paperAccountId = pp.brokerAccountId), (paperQty = Math.abs(pp.quantity));
     }
+    // Paper exit: book it on the account that actually holds the paper position (it may be the internal paper
+    // ledger account or a broker account that was on paper when the trade was opened).
+    let simAccountId: string | null = null;
+    let noPaperPosition = false;
+    if (x.closing && c.simulated) {
+      const held = await this.paperAccountFor(c.userId, x.t, c.accountId).catch(() => null);
+      if (held) simAccountId = held;
+      else noPaperPosition = true;
+    }
     const sim = c.simulated || paperAccountId !== null;
-    const base = { followerId: c.followerId, userId: c.userId, accountId: paperAccountId ?? c.accountId, broker: c.broker, simulated: sim };
+    const base = { followerId: c.followerId, userId: c.userId, accountId: paperAccountId ?? simAccountId ?? c.accountId, broker: c.broker, simulated: sim };
     const skip = (reason: string): CopyResult => ({ ...base, qty: 0, status: 'REJECTED', errorCode: 'SKIPPED', errorMessage: reason, attempts: 0 });
     const registry = this.registry!;
     const { t } = x;
     const s = c.settings;
 
-    if (!c.simulated && c.tokenExpiresAt && c.tokenExpiresAt <= Date.now()) return skip('Broker token expired');
+    if (!sim && c.tokenExpiresAt && c.tokenExpiresAt <= Date.now()) {
+      // LIVE, but the broker session expired: keep the strategy trade in the software ledger, send nothing.
+      const r = this.notSentResult(
+        { followerId: c.followerId, userId: c.userId, accountId: c.accountId, broker: c.broker, reason: 'Broker token expired', settings: s, notSent: true },
+        { strategyId: x.strategyId, t, closing: x.closing, masterQty: x.masterQty, price: x.price, lotSize: x.lotSize, halted: false },
+      );
+      return r;
+    }
 
     let qty: number;
     const net = registry.clientNet(c.followerId, t.exchange, t.symbol, t.productType);
+    // Paper mode, but nothing is held on paper (the position was opened in LIVE mode): never invent an opposite
+    // paper position. The strategy trade itself is closed in the software ledger by the master's exit.
+    if (x.closing && noPaperPosition) return skip('No open paper position to exit (opened in LIVE mode — manage it at your broker)');
     if (x.closing) {
       // Exit mirroring: close (part of) the follower's own copy position, never open a new one.
       if (paperAccountId) {
@@ -433,7 +468,9 @@ export class CopyEngineService {
           quantity: r.qty,
           filledQuantity: r.status === 'FILLED' ? r.qty : 0,
           price: t.price ?? undefined,
-          averagePrice: r.fillPrice ?? undefined, // for MISSED rows: master price (paper reference)
+          // Execution price only for real / simulated fills — a NOT_SENT order never executed (the strategy price
+          // lives on the master trade and is what the software ledger uses).
+          averagePrice: r.missed ? undefined : (r.fillPrice ?? undefined),
           status: r.status,
           brokerOrderId: r.brokerOrderId ?? null,
           errorCode: r.errorCode ?? null,
@@ -486,17 +523,17 @@ export class CopyEngineService {
       symbol: t.symbol,
       side: t.side,
       sent: rows.filter((r) => r.attempts > 0).length,
-      failed: rows.filter((r) => r.status === 'FAILED').length,
+      failed: rows.filter((r) => r.status === 'FAILED' && !r.missed).length,
     });
     for (const r of rows) {
       if (r.missed) {
-        this.realtime?.toUser(r.userId, WsEvent.COPY_ORDER_FAILED, { tradeId, symbol: t.symbol, side: t.side, qty: r.qty, status: 'MISSED', error: r.errorMessage });
+        this.realtime?.toUser(r.userId, WsEvent.COPY_ORDER_FAILED, { tradeId, symbol: t.symbol, side: t.side, qty: r.qty, status: NOT_SENT, error: r.errorMessage });
         void this.notifier?.notify({
           userId: r.userId,
           type: 'SIGNAL_MISSED',
           severity: 'WARNING',
-          title: `Signal missed: ${label}${r.qty ? ` × ${r.qty}` : ''}`,
-          body: 'Aapka demat connect nahi tha — broker reconnect karein taaki agle signals copy hon.',
+          title: `Live trade not sent to broker: ${label}${r.qty ? ` × ${r.qty}` : ''}`,
+          body: 'Recorded in your Portfolio, but no broker order was placed — connect your broker in Broker connection.',
         });
         continue;
       }
@@ -558,6 +595,20 @@ export class CopyEngineService {
       });
     }
     this.realtime?.toUser(open[0]?.masterUserId ?? '', WsEvent.MASTER_TRADE_DETECTED, { symbol: t.symbol, side: t.side, signalClosed: true });
+  }
+
+  /**
+   * Account holding the user's open PAPER position that an exit on `side` would reduce (prefers `preferId`),
+   * or null when nothing is held on paper.
+   */
+  async paperAccountFor(userId: string, t: Pick<MasterTrade, 'exchange' | 'symbol' | 'productType' | 'side'>, preferId?: string | null): Promise<string | null> {
+    const rows = await this.prisma.position.findMany({
+      where: { userId, isPaper: true, exchange: t.exchange, symbol: t.symbol, productType: t.productType, quantity: t.side === 'BUY' ? { lt: 0 } : { gt: 0 } },
+      select: { brokerAccountId: true },
+      orderBy: { updatedAt: 'asc' },
+    });
+    if (!rows.length) return null;
+    return (rows.find((r) => r.brokerAccountId === preferId) ?? rows[0]!).brokerAccountId;
   }
 
   /** Paper bookkeeping: net position, average price and realized P&L. */

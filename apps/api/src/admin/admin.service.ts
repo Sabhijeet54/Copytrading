@@ -109,7 +109,7 @@ export class AdminService {
       failedCopyOrders,
     ] = await Promise.all([
       this.prisma.user.count(),
-      this.prisma.brokerAccount.count({ where: { status: 'CONNECTED' } }),
+      this.prisma.brokerAccount.count({ where: { status: 'CONNECTED', broker: { not: 'MOCK' } } }),
       this.prisma.user.count({ where: { role: 'MASTER', status: 'ACTIVE', strategies: { some: { status: 'ACTIVE' } } } }),
       this.prisma.strategyFollower.groupBy({ by: ['followerUserId'], where: { copyStatus: 'ON' } }),
       this.prisma.strategy.count({ where: { status: 'ACTIVE' } }),
@@ -126,7 +126,7 @@ export class AdminService {
       this.prisma.user.count({ where: { createdAt: { gte: lastMonthStart, lt: monthStart } } }),
       this.prisma.user.count({ where: { licenceExpiresAt: { lte: now } } }),
       this.prisma.user.count({ where: { licenceExpiresAt: { gt: now, lte: new Date(now.getTime() + 7 * 86_400_000) } } }),
-      this.prisma.user.count({ where: { role: 'FOLLOWER', status: 'ACTIVE', brokerAccounts: { some: { status: 'CONNECTED', mode: 'TRADING' } } } }),
+      this.prisma.user.count({ where: { role: 'FOLLOWER', status: 'ACTIVE', brokerAccounts: { some: { status: 'CONNECTED', mode: 'TRADING', broker: { not: 'MOCK' } } } } }),
     ]);
     return {
       totalUsers,
@@ -247,7 +247,7 @@ export class AdminService {
     const expires = new Date(base.getTime() + dto.days * 86_400_000);
     await this.prisma.user.update({
       where: { id },
-      data: { licenceDays: (dto.extend !== false && running ? (user.licenceDays ?? 0) : 0) + dto.days, licenceAssignedAt: now, licenceExpiresAt: expires, demo: !!dto.demo },
+      data: { licenceDays: (dto.extend !== false && running ? (user.licenceDays ?? 0) : 0) + dto.days, licenceAssignedAt: now, licenceExpiresAt: expires, demo: !!dto.demo, ...(dto.demo ? { tradingMode: 'PAPER' } : {}) },
     });
     await this.audit.log({ action: 'PROFILE_UPDATED', actorUserId: admin.id, targetType: 'User', targetId: id, metadata: { licenceDays: dto.days, demo: !!dto.demo, extend: dto.extend !== false, expiresAt: expires.toISOString() }, client });
     if (dto.demo) await this.prisma.brokerAccount.updateMany({ where: { userId: id, mode: 'TRADING' }, data: { isPaper: true } });

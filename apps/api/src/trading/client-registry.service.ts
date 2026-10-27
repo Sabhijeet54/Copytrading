@@ -44,6 +44,11 @@ export interface SkippedClient {
   reason: string;
   /** Present when the follower's settings are known, so a "missed signal" can show the would-be quantity. */
   settings?: ClientSettings;
+  /**
+   * LIVE mode, but no usable broker connection (none / disconnected / expired / no session): the strategy trade
+   * is still recorded in the software ledger, but no broker order is sent ("not sent" in the Orders section).
+   */
+  notSent?: boolean;
 }
 
 export interface StrategyInfo extends QtyStrategy {
@@ -222,7 +227,11 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
     const started = Date.now();
     const rows = await this.prisma.strategyFollower.findMany({
       where: { copyStatus: 'ON', strategy: { status: 'ACTIVE' } },
-      include: { brokerAccount: true, strategy: true, follower: { select: { licenceExpiresAt: true, status: true, demo: true } } },
+      include: {
+        brokerAccount: true,
+        strategy: true,
+        follower: { select: { licenceExpiresAt: true, status: true, demo: true, tradingMode: true, brokerAccounts: { where: { mode: 'TRADING' }, orderBy: { createdAt: 'asc' } } } },
+      },
     });
     const now = Date.now();
     const byStrategy = new Map<string, ClientEntry[]>();
@@ -241,7 +250,7 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
         allowedExchanges: s.allowedExchanges,
         allowedInstruments: s.allowedInstruments,
       });
-      const a = r.brokerAccount;
+      const subAccount = r.brokerAccount;
       const settings: ClientSettings = {
         allocationMode: r.allocationMode,
         allocationPercent: N(r.allocationPercent),
@@ -258,7 +267,7 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
       const skip = (reason: string) =>
         skipped.set(s.id, [
           ...(skipped.get(s.id) ?? []),
-          { followerId: r.id, userId: r.followerUserId, accountId: a?.id ?? null, broker: a?.broker ?? null, reason, settings },
+          { followerId: r.id, userId: r.followerUserId, accountId: subAccount?.id ?? null, broker: subAccount?.broker ?? null, reason, settings },
         ]);
       if (r.follower.status !== 'ACTIVE') {
         skip('Client account disabled');
@@ -270,32 +279,48 @@ export class ClientRegistryService implements OnApplicationBootstrap, OnModuleDe
         skip(lic !== null ? 'Licence expired — renew to resume copy trading' : 'No licence assigned');
         continue;
       }
-      if (!a) {
-        skip('No broker account selected');
+      // Software trading mode (dashboard switch) decides paper vs live — NOT the broker connection.
+      // Demo licence: always paper.
+      const simulated = r.follower.demo || r.follower.tradingMode !== 'LIVE';
+      const userAccounts = r.follower.brokerAccounts;
+      const realAccounts = userAccounts.filter((x) => x.broker !== 'MOCK');
+      let ledger = userAccounts.find((x) => x.broker === 'MOCK') ?? null;
+      const ensureLedger = async () => (ledger ??= await this.trading.ensureLedgerAccount(r.followerUserId));
+      let a: BrokerAccount | null = subAccount;
+      if (a && a.mode === 'DATA_ONLY') {
+        skip('Account is DATA_ONLY (master) — orders blocked');
         continue;
       }
-      // Demo licence: always paper, whatever the account switch says.
-      const simulated = this.trading.isSimulated(a) || r.follower.demo;
-      if (!simulated) {
-        if (a.mode === 'DATA_ONLY') {
-          skip('Account is DATA_ONLY (master) — orders blocked');
+      let adapter: BrokerAdapter | null = null;
+      if (simulated) {
+        // Paper trading never needs a broker: use the subscription's account when it is on paper, else the
+        // internal paper ledger account.
+        if (!a || !this.trading.isSimulated(a)) a = await ensureLedger();
+      } else {
+        // Live: route to the client's real broker account (the subscription's, else their first connected one).
+        const real = a && a.broker !== 'MOCK' ? a : (realAccounts.find((x) => x.status === 'CONNECTED') ?? realAccounts[0] ?? null);
+        const notSent = async (reason: string) =>
+          skipped.set(s.id, [
+            ...(skipped.get(s.id) ?? []),
+            { followerId: r.id, userId: r.followerUserId, accountId: real?.id ?? (await ensureLedger()).id, broker: real?.broker ?? 'MOCK', reason, settings, notSent: true },
+          ]);
+        if (!real) {
+          await notSent('No broker connected');
           continue;
         }
+        a = real;
         if (a.status !== 'CONNECTED') {
-          skip(`Broker ${a.status.toLowerCase()}${a.disconnectReason ? `: ${a.disconnectReason}` : ''}`);
+          await notSent(`Broker ${a.status.toLowerCase()}${a.disconnectReason ? `: ${a.disconnectReason}` : ''}`);
           continue;
         }
         if (a.tokenExpiresAt && a.tokenExpiresAt.getTime() <= now) {
-          skip('Broker token expired');
+          await notSent('Broker token expired');
           continue;
         }
-      }
-      let adapter: BrokerAdapter | null = null;
-      if (!simulated) {
         if (!adapters.has(a.id)) adapters.set(a.id, await this.buildAdapter(a));
         adapter = adapters.get(a.id) ?? null;
         if (!adapter) {
-          skip('Broker session unavailable');
+          await notSent('Broker session unavailable');
           continue;
         }
       }

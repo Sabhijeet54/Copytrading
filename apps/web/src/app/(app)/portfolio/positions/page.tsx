@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { BrokerOrdersCard, HoldingsCard, LivePositionsCard, Pnl, Tabs } from '@/components/live-account';
-import { CopyOrdersTable } from '@/components/master-client-detail';
+import { BrokerOrdersTable } from '@/components/broker-orders-table';
 import { PageHeader } from '@/components/page-header';
 import { TradeBookCard } from '@/components/trade-book';
 import { Button } from '@/components/ui/button';
@@ -28,6 +28,7 @@ export default function PositionsPage() {
   }, []);
   const p = portfolio.data;
   const nPositions = book.data?.rows.length ?? 0;
+  // Orders count = orders today (the same list the Orders tab shows).
   const nHoldings = (p?.live ?? []).reduce((a, x) => a + (x.holdings?.length ?? 0), 0);
   const nOrders = p?.copyOrders.length ?? 0;
 
@@ -68,7 +69,7 @@ export default function PositionsPage() {
         </DialogContent>
       </Dialog>
 
-      <div className="grid gap-4">
+      <div className="grid gap-4 [&>*]:min-w-0">
         <Tabs
           value={tab}
           onChange={setTab}
@@ -82,23 +83,43 @@ export default function PositionsPage() {
         {tab === 'positions' ? (
           <>
             <Card>
-              <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-6">
-                <div>
-                  <p className="text-xs text-muted-foreground">Today&apos;s P&amp;L (all strategy trades)</p>
-                  <p className="text-2xl font-semibold">
-                    <Pnl value={p?.todayPnl ?? 0} />
-                  </p>
+              <CardContent className="flex flex-wrap items-center justify-between gap-6 pt-6">
+                <div className="flex flex-wrap gap-8">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Strategy P&amp;L today (software-level)</p>
+                    <p className="text-2xl font-semibold">
+                      <Pnl value={book.data?.software.totalPnl ?? p?.todayPnl ?? 0} />
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      Realized <Pnl value={book.data?.software.realizedPnl ?? 0} /> · Unrealized <Pnl value={book.data?.software.unrealizedPnl ?? 0} />
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Broker-executed P&amp;L (Demat)</p>
+                    <p className="text-2xl font-semibold">
+                      <Pnl value={book.data?.brokerExecuted.totalPnl ?? p?.brokerPnl ?? 0} />
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">Actual broker fills only — kept separate from strategy P&amp;L.</p>
+                  </div>
                 </div>
                 {p?.paperMode ? (
                   <p className="max-w-md rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
-                    <strong>Paper mode</strong> — strategy trades are simulated; no real orders reach your broker.
+                    <strong>Paper mode</strong> — strategy trades are simulated in the software; no orders reach a broker.
                   </p>
-                ) : null}
+                ) : (
+                  <p className="max-w-md rounded-md border border-success/40 bg-success/10 px-3 py-2 text-xs">
+                    <strong>Live mode</strong> — strategy trades are listed here even when a broker order is rejected or not sent. Check the{' '}
+                    <button type="button" className="font-medium text-primary underline" onClick={() => setTab('orders')}>
+                      Orders
+                    </button>{' '}
+                    tab for actual broker execution.
+                  </p>
+                )}
               </CardContent>
             </Card>
             <TradeBookCard />
             {portfolio.isLoading ? <p className="text-sm text-muted-foreground">Loading live data…</p> : null}
-            {/* Broker card only for live trading (in paper mode the broker has no strategy positions). */}
+            {/* Actual Demat positions from the broker (live trading only; in paper mode the broker has no strategy positions). */}
             {p?.live.filter((a) => !p.paperMode || (a.positions ?? []).length > 0).map((a) => <LivePositionsCard key={a.accountId} a={a} />)}
           </>
         ) : null}
@@ -114,24 +135,27 @@ export default function PositionsPage() {
           <>
             <Card>
               <CardHeader>
-                <CardTitle>Strategy orders today</CardTitle>
-                <CardDescription>Every strategy trade placed (or skipped) for your account today — the list starts fresh every trading day.</CardDescription>
+                <CardTitle>Broker orders today</CardTitle>
+                <CardDescription>
+                  Actual broker execution of every strategy trade: submitted, open, executed, partially filled, rejected (with the broker&apos;s reason), cancelled, failed — or not
+                  sent because no valid broker connection was available. Paper trades are never sent to a broker. Match a row to Positions by Trade ID.
+                </CardDescription>
               </CardHeader>
               <CardContent>
-                <CopyOrdersTable rows={p?.copyOrders ?? []} empty={portfolio.isLoading ? 'Loading…' : 'No strategy orders today'} />
+                <BrokerOrdersTable rows={p?.copyOrders ?? []} empty={portfolio.isLoading ? 'Loading…' : 'No strategy orders today'} />
               </CardContent>
             </Card>
             {p?.live.map((a) => <BrokerOrdersCard key={a.accountId} a={a} />)}
           </>
         ) : null}
 
-        {p && p.live.length === 0 && p.paperPositions.length === 0 && tab !== 'orders' ? (
+        {p && p.live.length === 0 && tab !== 'orders' ? (
           <p className="text-sm text-muted-foreground">
-            Connect your broker on the{' '}
+            No broker connected — strategy trades are still recorded above. Connect a broker on the{' '}
             <Link className="underline" href="/broker">
               Broker connection
             </Link>{' '}
-            page to see live positions and holdings.
+            page to see your Demat positions and holdings.
           </p>
         ) : null}
       </div>
